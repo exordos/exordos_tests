@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    # at 01:00 every day.
+    - cron: "0 1 * * *"
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  USERNAME: ${{ secrets.USERNAME }}
+  USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
+  ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+
+jobs:
+  Realm_Tests:
+    if : ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Generate uuid
+        run: uuidgen > uuid
+      - name:  Generate SSH key
+        run: ssh-keygen -t ed25519 -f id_ed25519 -N ""
+      - name: create_realm
+        run: |
+          set -eux
+          REALM_UUID="$(cat uuid)"
+          exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms add --uuid "$REALM_UUID" --name smoke-${{ github.run_id }} --admin-password ${ADMIN_PASSWORD} --node-cores 4 --node-ram 8192 --node-root-disk-size 50 --ssh-public-key id_ed25519.pub
+      - name: wait_for_realm
+        timeout-minutes: 10
+        run: |
+          set -eux
+          
+          for i in {1..30}; do
+            echo "Waiting for Realm... ($i/30)"
+            exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms show smoke-${{ github.run_id }} | grep status
+            sleep 10
+          done
+          
+          exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms show smoke-${{ github.run_id }}
+      - name: check_ssh_connection
+        run: |
+          set -eux
+          REALM_UUID="$(cat uuid)"
+          ssh_info=$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms ssh_connection $REALM_UUID -o json)
+          ssh_host=$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')
+          ssh_port=$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')
+          ssh -tt -o StrictHostKeyChecking=no ubuntu@$ssh_host -p $ssh_port -i id_ed25519 "hostname"
+      - name: delete_realm
+        run: |
+          set -eux
+          REALM_UUID="$(cat uuid)"
+          exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms delete $REALM_UUID
