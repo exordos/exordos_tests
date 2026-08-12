@@ -1,4 +1,4 @@
-name: tests
+name: realm_tests
 
 on:
   push:
