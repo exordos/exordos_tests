@@ -49,7 +49,7 @@ jobs:
           ssh_info=$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms ssh_connection $REALM_UUID -o json)
           ssh_host=$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')
           ssh_port=$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')
-          ssh -tt -o StrictHostKeyChecking=no ubuntu@$ssh_host -p $ssh_port -i id_ed25519 "hostname"
+          ssh -tt -o StrictHostKeyChecking=no ubuntu@$ssh_host -p $ssh_port -i id_ed25519 "exordos e e l"
       - name: delete_realm
         run: |
           set -eux
