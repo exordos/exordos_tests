@@ -19,8 +19,23 @@ jobs:
   World_Tests:
     runs-on: ubuntu-24.04
     # Temporarily disabled. need disk space.
-    if: ${{ false }}
+    # if: ${{ false }}
     steps:
+      - name: Check Remaining Disk Space
+        run: df -h
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          # Set to true to delete tools you do not need
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Check Remaining Disk Space
+        run: df -h
       - name: Setup `packer`
         uses: hashicorp/setup-packer@main
         with:
