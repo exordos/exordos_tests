@@ -1,4 +1,4 @@
-name: metapaas_tests
+name: s3aas_tests
 
 on:
   push:
@@ -12,11 +12,11 @@ env:
   CORE_ENDPOINT_URL: http://10.20.0.2:80/api/core
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
-  ELEMENT_NAME: metapaas
+  ELEMENT_NAME: s3aas
 
 
 jobs:
-  Metapaas_Tests:
+  s3aas_Tests:
     runs-on: ubuntu-24.04
     if : ${{ github.actor != 'dependabot[bot]' }}
     steps:
@@ -52,9 +52,9 @@ jobs:
         run: |
           HYPER_UUID="$(exordos c h l -o json | jq -r .[0]."uuid")"
           exordos compute hypervisors update $HYPER_UUID --cores-ratio 10.0 --ram-ratio 10.0
-      - name: install metapaas
+      - name: install s3aas
         run: exordos e e install $ELEMENT_NAME
-      - name: check exordos metapaas
+      - name: check exordos s3aas
         timeout-minutes: 10
         run: |
           set -eux
@@ -64,6 +64,7 @@ jobs:
           done
 
           exordos e e show $ELEMENT_NAME
+          exordos e e l
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
