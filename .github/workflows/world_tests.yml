@@ -18,6 +18,7 @@ env:
 jobs:
   World_Tests:
     runs-on: ubuntu-24.04
+    if : ${{ github.actor != 'dependabot[bot]' }}
     # Temporarily disabled. need disk space.
     # if: ${{ false }}
     steps:
