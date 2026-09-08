@@ -35,7 +35,7 @@ jobs:
         run: |
           set -eux
           
-          for i in {1..30}; do
+          for i in {1..50}; do
             echo "Waiting for Realm... ($i/30)"
             exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms show smoke-${{ github.run_id }} | grep status
             sleep 10
