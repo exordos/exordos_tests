@@ -13,7 +13,7 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: core
-  BASE_CORE_VERSION: 0.2.22
+  BASE_CORE_VERSION: 0.2.27
 
 
 jobs:
@@ -29,9 +29,17 @@ jobs:
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
       - name: Install hypervisor
         run: |
+          set -eux
+          
+          exordos bootstrap -i $BASE_CORE_VERSION -m core --download-only > prefetch.log 2>&1 &
+          PREFETCH_PID=$!
+          
           EXORDOS_BIN=$(which exordos)
           sudo $EXORDOS_BIN compute hypervisors init --connection-uri qemu+tcp://10.20.0.1/system
           sudo chmod 666 /dev/kvm
+          
+          wait $PREFETCH_PID || { cat prefetch.log; exit 1; }
+          cat prefetch.log
       - name: set exordos config
         run: |
           exordos settings set-realm default --endpoint $CORE_ENDPOINT_URL
@@ -78,6 +86,7 @@ jobs:
           while [ $(exordos ee l -o json -f name=$ELEMENT_NAME | jq -r .[0]."status") != "ACTIVE" ]; do
             sleep 5
           done
+          
           exordos e e show $ELEMENT_NAME
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
