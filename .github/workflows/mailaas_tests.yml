@@ -13,6 +13,7 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: mailaas
+  BASE_CORE_VERSION: 0.2.27
 
 
 jobs:
@@ -28,16 +29,24 @@ jobs:
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
       - name: Install hypervisor
         run: |
+          set -eux
+          
+          exordos bootstrap -i $BASE_CORE_VERSION -m core --download-only > prefetch.log 2>&1 &
+          PREFETCH_PID=$!
+          
           EXORDOS_BIN=$(which exordos)
           sudo $EXORDOS_BIN compute hypervisors init --connection-uri qemu+tcp://10.20.0.1/system
           sudo chmod 666 /dev/kvm
+          
+          wait $PREFETCH_PID || { cat prefetch.log; exit 1; }
+          cat prefetch.log
       - name: set exordos config
         run: |
           exordos settings set-realm default --endpoint $CORE_ENDPOINT_URL
           exordos settings set-context default --name default --user $CORE_USERNAME --password $CORE_PASSWORD
       - name: Bootstrap exordos_core
         run:
-          exordos bootstrap -i latest -f -m core --admin-password $CORE_PASSWORD --cidr 10.20.0.0/22
+          exordos bootstrap -i $BASE_CORE_VERSION -f -m core --admin-password $CORE_PASSWORD --cidr 10.20.0.0/22
       - name: Wait for Exordos Core API
         run: |
           for i in {1..60}; do
