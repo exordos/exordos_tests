@@ -19,6 +19,7 @@ jobs:
     if : ${{ github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
       - name: Install exordos
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
       - name: Generate uuid
@@ -34,11 +35,9 @@ jobs:
         timeout-minutes: 12
         run: |
           set -eux
-          
-          while [ $(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms show smoke-${{ github.run_id }} -o json | jq -r '.[] | select(.field == "status") | .value') != "ACTIVE" ]; do
-            sleep 5
-          done
-          
+
+          .github/scripts/wait-for-realm.sh smoke-${{ github.run_id }} 660
+
           exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms show smoke-${{ github.run_id }}
       - name: check_ssh_connection
         run: |
