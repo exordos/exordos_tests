@@ -13,13 +13,13 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: mailaas
-  BASE_CORE_VERSION: 0.2.27
+  BASE_CORE_VERSION: latest
 
 
 jobs:
   mailaas_Tests:
     runs-on: ubuntu-24.04
-    if : ${{ github.actor != 'dependabot[bot]' }}
+    if: ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v7
       - name: Setup `packer`

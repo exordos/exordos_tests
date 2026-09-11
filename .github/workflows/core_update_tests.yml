@@ -13,7 +13,7 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: core
-  BASE_CORE_VERSION: 0.2.27
+  BASE_CORE_VERSION: 0.2.29
 
 
 jobs:
@@ -89,4 +89,4 @@ jobs:
         if: ${{ failure() }}
         with:
           limit-access-to-actor: true
-          wait-timeout-minutes: 15
+          wait-timeout-minutes: 30

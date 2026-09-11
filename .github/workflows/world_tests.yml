@@ -13,14 +13,12 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: world
-  BASE_CORE_VERSION: 0.2.27
+  BASE_CORE_VERSION: latest
 
 jobs:
   World_Tests:
     runs-on: ubuntu-24.04
-    if : ${{ github.actor != 'dependabot[bot]' }}
-    # Temporarily disabled. need disk space.
-    # if: ${{ false }}
+    if: ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v7
       - name: Check Remaining Disk Space
