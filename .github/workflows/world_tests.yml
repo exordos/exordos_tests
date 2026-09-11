@@ -22,6 +22,7 @@ jobs:
     # Temporarily disabled. need disk space.
     # if: ${{ false }}
     steps:
+      - uses: actions/checkout@v7
       - name: Check Remaining Disk Space
         run: df -h
       - name: Free Disk Space (Ubuntu)
@@ -84,9 +85,7 @@ jobs:
         run: |
           set -eux
 
-          while [ $(exordos ee l -o json -f name=$ELEMENT_NAME | jq -r .[0]."status") != "ACTIVE" ]; do
-            sleep 5
-          done
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540
 
           exordos e e show $ELEMENT_NAME
       - name: Setup upterm session

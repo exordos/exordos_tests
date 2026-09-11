@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     if : ${{ github.actor != 'dependabot[bot]' }}
     steps:
+      - uses: actions/checkout@v7
       - name: Setup `packer`
         uses: hashicorp/setup-packer@main
         with:
@@ -67,9 +68,7 @@ jobs:
         run: |
           set -eux
 
-          while [ $(exordos ee l -o json -f name=$ELEMENT_NAME | jq -r .[0]."status") != "ACTIVE" ]; do
-            sleep 5
-          done
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540
 
           exordos e e show $ELEMENT_NAME
           exordos e e l
