@@ -24,7 +24,7 @@ jobs:
       - name: Check Remaining Disk Space
         run: df -h
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@v2.0.0
         with:
           # Set to true to delete tools you do not need
           tool-cache: false
