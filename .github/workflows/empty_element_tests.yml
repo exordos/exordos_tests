@@ -31,11 +31,18 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install exordos
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
-      - name: Generate SSH key
-        run: ssh-keygen -t ed25519 -f id_ed25519 -N ""
       - name: claim_realm
         # No `set -x` here: the claim answers with the realm's generated admin
         # password, and the trace would print it before it can be masked.
+        #
+        # No --ssh-public-key either. A claim accepts one and never applies
+        # it: the key only reaches the nested core through the realm spec at
+        # first boot, and the hook that re-delivers the spec restarts a
+        # service gated on the node's .bootstrapped marker, so it does nothing
+        # on a realm that has already booted -- which is every realm a claim
+        # hands over. This test drives the realm's own core API instead, and a
+        # test that needs a shell can add a key there with
+        # `exordos secret ssh_keys add`.
         run: |
           set -euo pipefail
 
@@ -48,7 +55,6 @@ jobs:
               realms claim \
                   --name "$REALM_NAME" \
                   --ttl-hours "$REALM_TTL_HOURS" \
-                  --ssh-public-key id_ed25519.pub \
                   -o json)"
           rc=$?
           set -e
@@ -72,9 +78,11 @@ jobs:
           }
 
           # Mask before anything else can echo it. This is the only answer
-          # that ever carries the password -- it cannot be read again.
+          # that ever carries the password -- it cannot be read again, and
+          # it is the whole of this test's access to the realm.
           admin_password="$(value admin_password)"
           echo "::add-mask::$admin_password"
+          echo "ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
 
           echo "REALM_UUID=$(value uuid)" >> "$GITHUB_ENV"
           echo "REALM_DOMAIN=$(value domain)" >> "$GITHUB_ENV"
@@ -82,56 +90,64 @@ jobs:
           echo "BASE_CORE_VERSION=$(value core_version)" >> "$GITHUB_ENV"
 
           echo "Claimed $(value uuid) at $(value domain)"
-      - name: wait_for_ssh
-        timeout-minutes: 5
+      - name: wait_for_realm_api
+        timeout-minutes: 10
+        # `ready_api` authenticates and lists the collections, so reaching it
+        # proves the realm's core answers *and* that the claim's password
+        # opens it -- which is the whole of what this test needs.
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          ssh_info="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
-              --user "$USERNAME" --password "$USER_PASSWORD" \
-              realms ssh_connection "$REALM_UUID" -o json)"
-          ssh_host="$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')"
-          ssh_port="$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')"
-          echo "SSH_HOST=$ssh_host" >> "$GITHUB_ENV"
-          echo "SSH_PORT=$ssh_port" >> "$GITHUB_ENV"
-
-          # A warm realm is already booted, so this should answer at once --
-          # the wait is for the shared load balancer's forward, not the node.
-          for i in $(seq 1 30); do
-              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-                     -p "$ssh_port" -i id_ed25519 "ubuntu@$ssh_host" true; then
-                  echo "ssh answered after $((i * 5))s at most"
-                  exit 0
-              fi
-              echo "Waiting for ssh on $ssh_host:$ssh_port... ($i/30)"
+          # A realm is published on the shared load balancer over HTTPS when
+          # the installation has a wildcard cert and over HTTP when it has
+          # none, so try both rather than bake in an assumption.
+          for i in $(seq 1 60); do
+              for scheme in https http; do
+                  url="$scheme://$REALM_DOMAIN/api/core"
+                  if exordos --endpoint "$url" --user admin \
+                             --password "$ADMIN_PASSWORD" \
+                             ready_api > /dev/null 2>&1; then
+                      echo "REALM_CORE_URL=$url" >> "$GITHUB_ENV"
+                      echo "The realm's core answered at $url"
+                      exit 0
+                  fi
+              done
+              echo "Waiting for the realm's core api... ($i/60)"
               sleep 5
           done
 
-          echo "ssh never answered on $ssh_host:$ssh_port" >&2
+          echo "The realm's core answered on neither https nor http at" >&2
+          echo "$REALM_DOMAIN. The per-realm ingress forwards 80 and 443 to" >&2
+          echo "the nested core, so check the realm's border and the shared" >&2
+          echo "load balancer." >&2
           exit 1
+      - name: point_cli_at_the_realm
+        # Not `set -x`: the password is an argument here.
+        #
+        # The shared wait script calls a bare `exordos`, so the realm becomes
+        # the CLI's configured installation rather than being named on every
+        # command. The steps that address the ecosystem keep passing their own
+        # flags, which win over this.
+        run: |
+          set -euo pipefail
+
+          exordos settings set-realm default --endpoint "$REALM_CORE_URL"
+          exordos settings set-context default --name default \
+              --user admin --password "$ADMIN_PASSWORD"
       - name: install_element
         run: |
           set -eux
 
-          # The element goes into the realm's own core, which is reached from
-          # the node itself -- the same way realm_tests.yml asserts.
-          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
-              "ubuntu@$SSH_HOST" "exordos e e install $ELEMENT_NAME"
+          exordos e e install "$ELEMENT_NAME"
       - name: check_element
         timeout-minutes: 10
         run: |
           set -eux
 
-          # The status lives in the realm's core, so the wait has to run
-          # there. Both the exordos CLI and jq are on the realm node image.
-          scp -o StrictHostKeyChecking=no -P "$SSH_PORT" -i id_ed25519 \
-              .github/scripts/wait-for-element.sh "ubuntu@$SSH_HOST:/tmp/"
-          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
-              "ubuntu@$SSH_HOST" \
-              "chmod +x /tmp/wait-for-element.sh && /tmp/wait-for-element.sh $ELEMENT_NAME 540"
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540
 
-          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
-              "ubuntu@$SSH_HOST" "exordos e e show $ELEMENT_NAME"
+          exordos e e show "$ELEMENT_NAME"
+          exordos e e l
       - name: delete_realm
         # always(): a realm left behind by a failed assertion is a realm
         # somebody else cannot claim. The TTL would get it eventually; this
