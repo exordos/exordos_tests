@@ -1,11 +1,13 @@
 name: empty_element_tests
 
 on:
-  # Dispatch only, deliberately. A claim takes a realm out of the warm pool
-  # and the pool refills at the cost of a full cold boot, so running this on
-  # every push would drain it and turn later runs into the slow path without
-  # anything saying so. Add a cron (and a fallback to `realms add`) once the
-  # pool is sized for it.
+  # TEMPORARY, while this spike is being iterated on: every push runs it.
+  # It must go back to dispatch-only before this branch merges. A claim takes
+  # a realm out of the warm pool and the pool refills at the cost of a full
+  # cold boot, so claiming once per push would drain the pool and turn later
+  # runs into the slow path with nothing saying so. A cron belongs here only
+  # once the pool is sized for it and `realms add` is wired in as a fallback.
+  push:
   workflow_dispatch:
 
 env:
