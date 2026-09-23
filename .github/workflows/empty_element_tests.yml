@@ -1,12 +1,15 @@
 name: empty_element_tests
 
 on:
-  # Dispatch only, deliberately. A claim takes a realm out of the warm pool
-  # and the pool refills at the cost of a full cold boot, so running this on
-  # every push would drain the pool and turn later runs into the slow path
-  # with nothing saying so. A cron belongs here once the pool is sized for
-  # it and `realms add` is wired in as a fallback for an empty one.
+  # No push trigger, unlike the other workflows. A claim takes a realm out of
+  # the warm pool and the pool refills at the cost of a full cold boot, so a
+  # claim per push would drain it and turn later runs into the slow path with
+  # nothing saying so. One claim a day is a realm the pool refills easily.
   workflow_dispatch:
+  schedule:
+    # at 06:00 every day, after the stand-based runs above have finished
+    # with the runners.
+    - cron: "0 6 * * *"
 
 env:
   PROJECT_ID: ${{ secrets.PROJECT_ID }}
