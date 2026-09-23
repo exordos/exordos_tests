@@ -1,0 +1,156 @@
+name: empty_element_tests
+
+on:
+  # Dispatch only, deliberately. A claim takes a realm out of the warm pool
+  # and the pool refills at the cost of a full cold boot, so running this on
+  # every push would drain it and turn later runs into the slow path without
+  # anything saying so. Add a cron (and a fallback to `realms add`) once the
+  # pool is sized for it.
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  USERNAME: ${{ secrets.USERNAME }}
+  USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+  ELEMENT_NAME: empty
+  # A backstop, not the teardown: the builder deletes the realm at this
+  # deadline even if the run dies before it gets to delete it itself.
+  REALM_TTL_HOURS: "2"
+
+jobs:
+  Empty_Element_Tests:
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Generate SSH key
+        run: ssh-keygen -t ed25519 -f id_ed25519 -N ""
+      - name: claim_realm
+        # No `set -x` here: the claim answers with the realm's generated admin
+        # password, and the trace would print it before it can be masked.
+        run: |
+          set -euo pipefail
+
+          REALM_NAME="empty-${{ github.run_id }}"
+          echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
+
+          set +e
+          claimed="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
+              --user "$USERNAME" --password "$USER_PASSWORD" \
+              realms claim \
+                  --name "$REALM_NAME" \
+                  --ttl-hours "$REALM_TTL_HOURS" \
+                  --ssh-public-key id_ed25519.pub \
+                  -o json)"
+          rc=$?
+          set -e
+
+          # The CLI keeps an empty pool apart from a failure, so say which
+          # one happened rather than leaving a bare exit code.
+          if [ "$rc" -eq 3 ]; then
+              echo "The pool handed out nothing: no warm realm was ready." >&2
+              echo "Check [realm_pool] size on the stand and the pool" >&2
+              echo "project's realm quota." >&2
+              exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+              echo "Claim failed with exit code $rc" >&2
+              exit "$rc"
+          fi
+
+          value() {
+              echo "$claimed" | jq -r --arg f "$1" \
+                  '.[] | select(.field == $f) | .value'
+          }
+
+          # Mask before anything else can echo it. This is the only answer
+          # that ever carries the password -- it cannot be read again.
+          admin_password="$(value admin_password)"
+          echo "::add-mask::$admin_password"
+
+          echo "REALM_UUID=$(value uuid)" >> "$GITHUB_ENV"
+          echo "REALM_DOMAIN=$(value domain)" >> "$GITHUB_ENV"
+          # Labels the metrics push with what the pool was warmed from.
+          echo "BASE_CORE_VERSION=$(value core_version)" >> "$GITHUB_ENV"
+
+          echo "Claimed $(value uuid) at $(value domain)"
+      - name: wait_for_ssh
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+
+          ssh_info="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
+              --user "$USERNAME" --password "$USER_PASSWORD" \
+              realms ssh_connection "$REALM_UUID" -o json)"
+          ssh_host="$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')"
+          ssh_port="$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')"
+          echo "SSH_HOST=$ssh_host" >> "$GITHUB_ENV"
+          echo "SSH_PORT=$ssh_port" >> "$GITHUB_ENV"
+
+          # A warm realm is already booted, so this should answer at once --
+          # the wait is for the shared load balancer's forward, not the node.
+          for i in $(seq 1 30); do
+              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+                     -p "$ssh_port" -i id_ed25519 "ubuntu@$ssh_host" true; then
+                  echo "ssh answered after $((i * 5))s at most"
+                  exit 0
+              fi
+              echo "Waiting for ssh on $ssh_host:$ssh_port... ($i/30)"
+              sleep 5
+          done
+
+          echo "ssh never answered on $ssh_host:$ssh_port" >&2
+          exit 1
+      - name: install_element
+        run: |
+          set -eux
+
+          # The element goes into the realm's own core, which is reached from
+          # the node itself -- the same way realm_tests.yml asserts.
+          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
+              "ubuntu@$SSH_HOST" "exordos e e install $ELEMENT_NAME"
+      - name: check_element
+        timeout-minutes: 10
+        run: |
+          set -eux
+
+          # The status lives in the realm's core, so the wait has to run
+          # there. Both the exordos CLI and jq are on the realm node image.
+          scp -o StrictHostKeyChecking=no -P "$SSH_PORT" -i id_ed25519 \
+              .github/scripts/wait-for-element.sh "ubuntu@$SSH_HOST:/tmp/"
+          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
+              "ubuntu@$SSH_HOST" \
+              "chmod +x /tmp/wait-for-element.sh && /tmp/wait-for-element.sh $ELEMENT_NAME 540"
+
+          ssh -tt -o StrictHostKeyChecking=no -p "$SSH_PORT" -i id_ed25519 \
+              "ubuntu@$SSH_HOST" "exordos e e show $ELEMENT_NAME"
+      - name: delete_realm
+        # always(): a realm left behind by a failed assertion is a realm
+        # somebody else cannot claim. The TTL would get it eventually; this
+        # gets it now.
+        if: ${{ always() }}
+        run: |
+          set -eux
+
+          if [ -z "${REALM_UUID:-}" ]; then
+              echo "No realm was claimed, nothing to delete"
+              exit 0
+          fi
+          exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
+              --user "$USERNAME" --password "$USER_PASSWORD" \
+              realms delete "$REALM_UUID"
+      # No metrics push yet: push-test-metrics.sh is not on this branch's
+      # base. Add the same step the other workflows carry once it lands --
+      # BASE_CORE_VERSION is already set above for its label.
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v1
+        if: ${{ failure() }}
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 15
