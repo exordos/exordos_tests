@@ -1,0 +1,104 @@
+name: empty_element_tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    # at 06:00 every day.
+    - cron: "0 6 * * *"
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  USERNAME: ${{ secrets.USERNAME }}
+  USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+  ELEMENT_NAME: empty
+  REALM_TTL_HOURS: "2"
+
+jobs:
+  Empty_Element_Tests:
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: get_realm
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+
+          REALM_NAME="empty-${{ github.run_id }}"
+          echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
+
+          got="$(.github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
+
+          echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
+          echo "$got" >> "$GITHUB_ENV"
+          echo "$got" | grep -v '^ADMIN_PASSWORD='
+      - name: wait_for_realm_api
+        timeout-minutes: 10
+        run: |
+          set -uo pipefail
+
+          for i in $(seq 1 60); do
+              for scheme in https http; do
+                  url="$scheme://$REALM_DOMAIN/api/core"
+                  if exordos --endpoint "$url" --user admin \
+                             --password "$ADMIN_PASSWORD" \
+                             ready_api > /dev/null 2>&1; then
+                      echo "REALM_CORE_URL=$url" >> "$GITHUB_ENV"
+                      echo "The realm's core answered at $url"
+                      exit 0
+                  fi
+              done
+              echo "Waiting for the realm's core api... ($i/60)"
+              sleep 5
+          done
+
+          echo "The realm's core answered on neither https nor http at" >&2
+          echo "$REALM_DOMAIN. The per-realm ingress forwards 80 and 443 to" >&2
+          echo "the nested core, so check the realm's border and the shared" >&2
+          echo "load balancer." >&2
+          exit 1
+      - name: point_cli_at_the_realm
+        run: |
+          set -euo pipefail
+
+          exordos settings set-realm default --endpoint "$REALM_CORE_URL"
+          exordos settings set-context default --name default \
+              --user admin --password "$ADMIN_PASSWORD"
+      - name: install_element
+        run: |
+          set -eux
+
+          exordos e e install "$ELEMENT_NAME"
+      - name: check_element
+        timeout-minutes: 10
+        run: |
+          set -eux
+
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540
+
+          exordos e e show "$ELEMENT_NAME"
+          exordos e e l
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v1
+        if: ${{ failure() }}
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 15
+      - name: delete_realm
+        if: ${{ always() }}
+        run: |
+          set -eux
+
+          if [ -z "${REALM_UUID:-}" ]; then
+              echo "No realm was claimed, nothing to delete"
+              exit 0
+          fi
+          exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
+              --user "$USERNAME" --password "$USER_PASSWORD" \
+              realms delete "$REALM_UUID"
