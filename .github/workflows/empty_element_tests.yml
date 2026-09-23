@@ -64,7 +64,6 @@ jobs:
 
           echo "REALM_UUID=$(value uuid)" >> "$GITHUB_ENV"
           echo "REALM_DOMAIN=$(value domain)" >> "$GITHUB_ENV"
-          echo "BASE_CORE_VERSION=$(value core_version)" >> "$GITHUB_ENV"
 
           echo "Claimed $(value uuid) at $(value domain)"
       - name: wait_for_realm_api
@@ -113,6 +112,12 @@ jobs:
 
           exordos e e show "$ELEMENT_NAME"
           exordos e e l
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v1
+        if: ${{ failure() }}
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 15
       - name: delete_realm
         if: ${{ always() }}
         run: |
@@ -125,9 +130,3 @@ jobs:
           exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
               --user "$USERNAME" --password "$USER_PASSWORD" \
               realms delete "$REALM_UUID"
-      - name: Setup upterm session
-        uses: owenthereal/action-upterm@v1
-        if: ${{ failure() }}
-        with:
-          limit-access-to-actor: true
-          wait-timeout-minutes: 15
