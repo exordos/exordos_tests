@@ -25,47 +25,19 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install exordos
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
-      - name: claim_realm
+      - name: get_realm
+        timeout-minutes: 15
         run: |
           set -euo pipefail
 
           REALM_NAME="empty-${{ github.run_id }}"
           echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
 
-          set +e
-          claimed="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
-              --user "$USERNAME" --password "$USER_PASSWORD" \
-              realms claim \
-                  --name "$REALM_NAME" \
-                  --ttl-hours "$REALM_TTL_HOURS" \
-                  -o json)"
-          rc=$?
-          set -e
+          got="$(.github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
 
-          if [ "$rc" -eq 3 ]; then
-              echo "The pool handed out nothing: no warm realm was ready." >&2
-              echo "Check [realm_pool] size on the stand and the pool" >&2
-              echo "project's realm quota." >&2
-              exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-              echo "Claim failed with exit code $rc" >&2
-              exit "$rc"
-          fi
-
-          value() {
-              echo "$claimed" | jq -r --arg f "$1" \
-                  '.[] | select(.field == $f) | .value'
-          }
-
-          admin_password="$(value admin_password)"
-          echo "::add-mask::$admin_password"
-          echo "ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
-
-          echo "REALM_UUID=$(value uuid)" >> "$GITHUB_ENV"
-          echo "REALM_DOMAIN=$(value domain)" >> "$GITHUB_ENV"
-
-          echo "Claimed $(value uuid) at $(value domain)"
+          echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
+          echo "$got" >> "$GITHUB_ENV"
+          echo "$got" | grep -v '^ADMIN_PASSWORD='
       - name: wait_for_realm_api
         timeout-minutes: 10
         run: |
