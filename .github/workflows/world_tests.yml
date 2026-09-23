@@ -1,7 +1,6 @@
 name: world_tests
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     # at 03:00 every day.
