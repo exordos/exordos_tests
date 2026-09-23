@@ -18,6 +18,9 @@ env:
 jobs:
   Core_Tests:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     if : ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v7
@@ -83,6 +86,15 @@ jobs:
           .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 240 "$BASE_CORE_VERSION"
           
           exordos e e show $ELEMENT_NAME
+      - name: Push test results to VictoriaMetrics
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          VM_IMPORT_URL: ${{ secrets.VM_IMPORT_URL }}
+          VM_IMPORT_USER: ${{ secrets.VM_IMPORT_USER }}
+          VM_IMPORT_PASSWORD: ${{ secrets.VM_IMPORT_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
