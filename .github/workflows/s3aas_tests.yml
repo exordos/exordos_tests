@@ -1,14 +1,11 @@
 name: s3aas_tests
 
 on:
-  # TEMPORARY, for the empty_element_tests spike: push and cron are commented
-  # out so a push to this branch runs empty_element_tests alone instead of
-  # building five stands. Uncomment both before this branch merges.
-  # push:
+  push:
   workflow_dispatch:
-  # schedule:
-  # at 04:00 every day.
-  #   - cron: "0 4 * * *"
+  schedule:
+    # at 04:00 every day.
+    - cron: "0 4 * * *"
 
 env:
   PACKER_VERSION: "1.9.2"
