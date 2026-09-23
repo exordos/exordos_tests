@@ -1,14 +1,9 @@
 name: empty_element_tests
 
 on:
-  # No push trigger, unlike the other workflows. A claim takes a realm out of
-  # the warm pool and the pool refills at the cost of a full cold boot, so a
-  # claim per push would drain it and turn later runs into the slow path with
-  # nothing saying so. One claim a day is a realm the pool refills easily.
   workflow_dispatch:
   schedule:
-    # at 06:00 every day, after the stand-based runs above have finished
-    # with the runners.
+    # at 06:00 every day.
     - cron: "0 6 * * *"
 
 env:
@@ -17,8 +12,6 @@ env:
   USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
   ENDPOINT: https://exordos.com/api/core
   ELEMENT_NAME: empty
-  # A backstop, not the teardown: the builder deletes the realm at this
-  # deadline even if the run dies before it gets to delete it itself.
   REALM_TTL_HOURS: "2"
 
 jobs:
@@ -33,17 +26,6 @@ jobs:
       - name: Install exordos
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
       - name: claim_realm
-        # No `set -x` here: the claim answers with the realm's generated admin
-        # password, and the trace would print it before it can be masked.
-        #
-        # No --ssh-public-key either. A claim accepts one and never applies
-        # it: the key only reaches the nested core through the realm spec at
-        # first boot, and the hook that re-delivers the spec restarts a
-        # service gated on the node's .bootstrapped marker, so it does nothing
-        # on a realm that has already booted -- which is every realm a claim
-        # hands over. This test drives the realm's own core API instead, and a
-        # test that needs a shell can add a key there with
-        # `exordos secret ssh_keys add`.
         run: |
           set -euo pipefail
 
@@ -60,8 +42,6 @@ jobs:
           rc=$?
           set -e
 
-          # The CLI keeps an empty pool apart from a failure, so say which
-          # one happened rather than leaving a bare exit code.
           if [ "$rc" -eq 3 ]; then
               echo "The pool handed out nothing: no warm realm was ready." >&2
               echo "Check [realm_pool] size on the stand and the pool" >&2
@@ -78,30 +58,20 @@ jobs:
                   '.[] | select(.field == $f) | .value'
           }
 
-          # Mask before anything else can echo it. This is the only answer
-          # that ever carries the password -- it cannot be read again, and
-          # it is the whole of this test's access to the realm.
           admin_password="$(value admin_password)"
           echo "::add-mask::$admin_password"
           echo "ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
 
           echo "REALM_UUID=$(value uuid)" >> "$GITHUB_ENV"
           echo "REALM_DOMAIN=$(value domain)" >> "$GITHUB_ENV"
-          # Labels the metrics push with what the pool was warmed from.
           echo "BASE_CORE_VERSION=$(value core_version)" >> "$GITHUB_ENV"
 
           echo "Claimed $(value uuid) at $(value domain)"
       - name: wait_for_realm_api
         timeout-minutes: 10
-        # `ready_api` authenticates and lists the collections, so reaching it
-        # proves the realm's core answers *and* that the claim's password
-        # opens it -- which is the whole of what this test needs.
         run: |
           set -uo pipefail
 
-          # A realm is published on the shared load balancer over HTTPS when
-          # the installation has a wildcard cert and over HTTP when it has
-          # none, so try both rather than bake in an assumption.
           for i in $(seq 1 60); do
               for scheme in https http; do
                   url="$scheme://$REALM_DOMAIN/api/core"
@@ -123,12 +93,6 @@ jobs:
           echo "load balancer." >&2
           exit 1
       - name: point_cli_at_the_realm
-        # Not `set -x`: the password is an argument here.
-        #
-        # The shared wait script calls a bare `exordos`, so the realm becomes
-        # the CLI's configured installation rather than being named on every
-        # command. The steps that address the ecosystem keep passing their own
-        # flags, which win over this.
         run: |
           set -euo pipefail
 
@@ -150,9 +114,6 @@ jobs:
           exordos e e show "$ELEMENT_NAME"
           exordos e e l
       - name: delete_realm
-        # always(): a realm left behind by a failed assertion is a realm
-        # somebody else cannot claim. The TTL would get it eventually; this
-        # gets it now.
         if: ${{ always() }}
         run: |
           set -eux
@@ -164,9 +125,6 @@ jobs:
           exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
               --user "$USERNAME" --password "$USER_PASSWORD" \
               realms delete "$REALM_UUID"
-      # No metrics push yet: push-test-metrics.sh is not on this branch's
-      # base. Add the same step the other workflows carry once it lands --
-      # BASE_CORE_VERSION is already set above for its label.
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
