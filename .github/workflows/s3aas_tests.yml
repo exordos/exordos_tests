@@ -1,7 +1,6 @@
 name: s3aas_tests
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     # at 04:00 every day.

@@ -1,7 +1,6 @@
 name: core_update_tests
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     # at 02:00 every day.
