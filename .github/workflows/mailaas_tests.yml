@@ -84,6 +84,13 @@ jobs:
 
           exordos e e show "$ELEMENT_NAME"
           exordos e e l
+      - name: Push test results to VictoriaMetrics
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          VM_IMPORT_URL: ${{ secrets.VM_IMPORT_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}

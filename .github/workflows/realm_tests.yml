@@ -17,6 +17,9 @@ jobs:
   Realm_Tests:
     if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - name: Install exordos
@@ -56,3 +59,10 @@ jobs:
           set -eux
           REALM_UUID="$(cat uuid)"
           exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" --user "$USERNAME" --password "$USER_PASSWORD" realms delete $REALM_UUID
+      - name: Push test results to VictoriaMetrics
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          VM_IMPORT_URL: ${{ secrets.VM_IMPORT_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
