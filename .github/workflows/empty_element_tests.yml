@@ -33,7 +33,13 @@ jobs:
           REALM_NAME="empty-${{ github.run_id }}"
           echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
 
-          got="$(.github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
+          # A key of this run's own, so the realm can be reached over ssh.
+          SSH_KEY="$RUNNER_TEMP/realm_key"
+          ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
+          echo "SSH_KEY=$SSH_KEY" >> "$GITHUB_ENV"
+
+          got="$(SSH_PUBLIC_KEY="$SSH_KEY.pub" \
+              .github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
 
           echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
           echo "$got" >> "$GITHUB_ENV"
@@ -63,6 +69,9 @@ jobs:
           echo "the nested core, so check the realm's border and the shared" >&2
           echo "load balancer." >&2
           exit 1
+      - name: check_ssh_connection
+        timeout-minutes: 15
+        run: .github/scripts/check-realm-ssh.sh "$REALM_UUID" "$SSH_KEY" 600
       - name: point_cli_at_the_realm
         run: |
           set -euo pipefail

@@ -6,6 +6,9 @@
 # The connection comes from the environment -- ENDPOINT, PROJECT_ID, USERNAME,
 # USER_PASSWORD -- as it does for wait-for-realm.sh, which this calls.
 #
+# SSH_PUBLIC_KEY, when set, is the path to a public key to put on the realm,
+# claimed or ordered alike, so the realm can be reached over ssh.
+#
 # Results are printed to stdout as KEY=value lines, ready to append to
 # $GITHUB_ENV, and everything else goes to stderr so stdout stays readable by
 # machine:
@@ -30,6 +33,17 @@ cold_timeout="${3:-660}"
 exo=(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID"
      --user "$USERNAME" --password "$USER_PASSWORD")
 
+# Passed on explicitly even though the CLI reads SSH_PUBLIC_KEY too, so a
+# missing file fails here, before a realm is taken, and not inside the CLI.
+ssh_key=()
+if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+    if [ ! -f "$SSH_PUBLIC_KEY" ]; then
+        echo "SSH_PUBLIC_KEY is not a file: $SSH_PUBLIC_KEY" >&2
+        exit 1
+    fi
+    ssh_key=(--ssh-public-key "$SSH_PUBLIC_KEY")
+fi
+
 # The exit code `realms claim` keeps for an empty pool, as opposed to a
 # failure: see POOL_EMPTY_EXIT_CODE in the CLI.
 POOL_EMPTY_EXIT_CODE=3
@@ -39,7 +53,7 @@ field() {
 }
 
 claimed="$("${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
-    -o json 2>/dev/null)"
+    "${ssh_key[@]}" -o json 2>/dev/null)"
 rc=$?
 
 if [ "$rc" -eq 0 ]; then
@@ -53,7 +67,8 @@ fi
 
 if [ "$rc" -ne "$POOL_EMPTY_EXIT_CODE" ]; then
     echo "Claim failed with exit code $rc" >&2
-    "${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" >&2
+    "${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
+        "${ssh_key[@]}" >&2
     exit "$rc"
 fi
 
@@ -74,7 +89,8 @@ admin_password="$(openssl rand -hex 16)"
 add_log="$(mktemp)"
 trap 'rm -f "$add_log"' EXIT
 if ! "${exo[@]}" realms add --uuid "$uuid" --name "$name" \
-        --admin-password "$admin_password" > "$add_log" 2>&1; then
+        --admin-password "$admin_password" "${ssh_key[@]}" \
+        > "$add_log" 2>&1; then
     sed "s/$admin_password/***/g" "$add_log" >&2
     echo "Could not order a realm" >&2
     exit 1
