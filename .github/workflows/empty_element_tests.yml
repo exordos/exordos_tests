@@ -95,10 +95,13 @@ jobs:
         run: |
           set -eux
 
-          if [ -z "${REALM_UUID:-}" ]; then
+          # Fall back to the name: an ordered realm that never came up leaves
+          # get-realm.sh without printing its uuid, and it has no TTL.
+          realm="${REALM_UUID:-${REALM_NAME:-}}"
+          if [ -z "$realm" ]; then
               echo "No realm was claimed, nothing to delete"
               exit 0
           fi
           exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
               --user "$USERNAME" --password "$USER_PASSWORD" \
-              realms delete "$REALM_UUID"
+              realms delete "$realm"
