@@ -1,0 +1,133 @@
+name: element_realm_test
+
+# Called by an element repository once its Build job has pushed a version: get
+# a realm, wait until that version reaches the realm's catalog, install the
+# elements on it in order and check them, then delete the realm.
+#
+#   Test:
+#     needs: Build
+#     uses: exordos/exordos_tests/.github/workflows/element_realm_test.yml@master
+#     with:
+#       elements: dbaas communal_pg_cluster
+#       version: ${{ needs.Build.outputs.version }}
+#       check-script: .github/scripts/check-communal-pg-cluster.sh
+#     secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      elements:
+        description: Space-separated elements to install, in order
+        required: true
+        type: string
+      version:
+        description: The version the Build job pushed, installed for every element
+        required: true
+        type: string
+      check-script:
+        description: >-
+          A script in the calling repository to run once the elements are
+          ACTIVE, with the CLI pointed at the realm
+        required: false
+        type: string
+        default: ""
+      element-timeout:
+        description: Seconds to wait for each element to become ACTIVE
+        required: false
+        type: number
+        default: 540
+      tests-ref:
+        description: The ref of exordos_tests whose scripts to use
+        required: false
+        type: string
+        default: master
+    secrets:
+      TEST_PROJECT_ID:
+        required: true
+      TEST_USERNAME:
+        required: true
+      TEST_USER_PASSWORD:
+        required: true
+
+env:
+  PROJECT_ID: ${{ secrets.TEST_PROJECT_ID }}
+  USERNAME: ${{ secrets.TEST_USERNAME }}
+  USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+  REALM_TTL_HOURS: "2"
+  SCRIPTS: exordos_tests/.github/scripts
+
+jobs:
+  Test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Checkout the realm scripts
+        uses: actions/checkout@v7
+        with:
+          repository: exordos/exordos_tests
+          ref: ${{ inputs.tests-ref }}
+          path: exordos_tests
+      - name: Checkout the element
+        if: ${{ inputs.check-script != '' }}
+        uses: actions/checkout@v7
+        with:
+          path: element
+      - name: get_realm
+        timeout-minutes: 15
+        working-directory: exordos_tests
+        run: |
+          set -euo pipefail
+
+          # The repository's name, so a realm left behind says who took it.
+          REALM_NAME="${GITHUB_REPOSITORY#*/}-${{ github.run_id }}"
+          echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
+
+          got="$(.github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
+
+          echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
+          echo "$got" >> "$GITHUB_ENV"
+          echo "$got" | grep -v '^ADMIN_PASSWORD='
+      - name: wait_for_realm_api
+        timeout-minutes: 10
+        run: $SCRIPTS/wait-for-realm-api.sh "$REALM_DOMAIN" 300 >> "$GITHUB_ENV"
+      - name: point_cli_at_the_realm
+        run: |
+          exordos settings set-realm default --endpoint "$REALM_CORE_URL"
+          exordos settings set-context default --name default \
+              --user admin --password "$ADMIN_PASSWORD"
+      - name: wait_for_pushed_version
+        timeout-minutes: 12
+        run: $SCRIPTS/wait-for-repo-version.sh "$VERSION" 600 $ELEMENTS
+        env:
+          VERSION: ${{ inputs.version }}
+          ELEMENTS: ${{ inputs.elements }}
+      - name: install_elements
+        run: |
+          set -euo pipefail
+
+          for name in $ELEMENTS; do
+              echo "::group::$name $VERSION"
+              $SCRIPTS/install-element.sh "$name" "$VERSION" "$TIMEOUT"
+              echo "::endgroup::"
+          done
+        env:
+          VERSION: ${{ inputs.version }}
+          ELEMENTS: ${{ inputs.elements }}
+          TIMEOUT: ${{ inputs.element-timeout }}
+      - name: check_elements
+        if: ${{ inputs.check-script != '' }}
+        working-directory: element
+        run: ./"$CHECK_SCRIPT"
+        env:
+          CHECK_SCRIPT: ${{ inputs.check-script }}
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v1
+        if: ${{ failure() }}
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 15
+      - name: delete_realm
+        if: ${{ always() }}
+        run: $SCRIPTS/delete-realm.sh
