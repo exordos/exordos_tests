@@ -33,7 +33,13 @@ jobs:
           REALM_NAME="empty-${{ github.run_id }}"
           echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
 
-          got="$(.github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
+          # A key of this run's own, so the realm can be reached over ssh.
+          SSH_KEY="$RUNNER_TEMP/realm_key"
+          ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
+          echo "SSH_KEY=$SSH_KEY" >> "$GITHUB_ENV"
+
+          got="$(SSH_PUBLIC_KEY="$SSH_KEY.pub" \
+              .github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
 
           echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
           echo "$got" >> "$GITHUB_ENV"
@@ -62,6 +68,30 @@ jobs:
           echo "$REALM_DOMAIN. The per-realm ingress forwards 80 and 443 to" >&2
           echo "the nested core, so check the realm's border and the shared" >&2
           echo "load balancer." >&2
+          exit 1
+      - name: check_ssh_connection
+        timeout-minutes: 5
+        run: |
+          set -uo pipefail
+
+          ssh_info="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
+              --user "$USERNAME" --password "$USER_PASSWORD" \
+              realms ssh_connection "$REALM_UUID" -o json)"
+          ssh_host="$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')"
+          ssh_port="$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')"
+
+          for i in $(seq 1 12); do
+              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                     -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" \
+                     -p "$ssh_port" "ubuntu@$ssh_host" true; then
+                  echo "The realm takes the run's key at $ssh_host:$ssh_port"
+                  exit 0
+              fi
+              echo "Waiting for ssh to the realm... ($i/12)"
+              sleep 5
+          done
+
+          echo "The realm did not take the run's ssh key" >&2
           exit 1
       - name: point_cli_at_the_realm
         run: |
