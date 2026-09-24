@@ -10,7 +10,7 @@ name: element_realm_test
 #     with:
 #       elements: dbaas communal_pg_cluster
 #       version: ${{ needs.Build.outputs.version }}
-#       prepare-script: .github/scripts/overbook-hypervisor.sh
+#       overbook: true
 #       check-script: .github/scripts/check-communal-pg-cluster.sh
 #     secrets: inherit
 #
@@ -29,6 +29,21 @@ on:
         description: The version the Build job pushed, installed for every element
         required: true
         type: string
+      overbook:
+        description: >-
+          Overbook the realm's hypervisor (cores and RAM ratio 10) before
+          anything is installed, for elements whose nodes do not fit a warm
+          realm one to one
+        required: false
+        type: boolean
+        default: false
+      dependencies:
+        description: >-
+          Space-separated elements to install first, in order, at their
+          latest version -- metapaas for a metapaas plugin, say
+        required: false
+        type: string
+        default: ""
       prepare-script:
         description: >-
           A script in the calling repository to run on the realm before the
@@ -142,6 +157,22 @@ jobs:
           exordos settings set-realm default --endpoint "$REALM_CORE_URL"
           exordos settings set-context default --name default \
               --user admin --password "$ADMIN_PASSWORD"
+      - name: overbook
+        if: ${{ inputs.overbook }}
+        run: $SCRIPTS/overbook-hypervisor.sh 10.0 10.0
+      - name: install_dependencies
+        if: ${{ inputs.dependencies != '' }}
+        run: |
+          set -euo pipefail
+
+          for name in $DEPENDENCIES; do
+              echo "::group::$name"
+              $SCRIPTS/install-element.sh "$name" "" "$TIMEOUT"
+              echo "::endgroup::"
+          done
+        env:
+          DEPENDENCIES: ${{ inputs.dependencies }}
+          TIMEOUT: ${{ inputs.element-timeout }}
       - name: prepare_realm
         if: ${{ inputs.prepare-script != '' }}
         working-directory: element

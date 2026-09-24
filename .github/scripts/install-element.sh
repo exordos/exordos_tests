@@ -24,8 +24,15 @@ if ! "${install[@]}"; then
     # uninstalled".  So an element the realm lists after a failed install is
     # the one asked for, still being set up: wait for it, and let the version
     # check below catch an element that was there before.
-    if [ -z "$(exordos ee l -o json -f "name=$name" 2>/dev/null \
-            | jq -r '.[0].name // ""' 2>/dev/null)" ]; then
+    # The realm's core can be as slow to answer the lookup, so give it a few
+    # tries before taking an empty answer for a missing element.
+    listed=""
+    for _ in 1 2 3; do
+        listed="$(exordos ee l -o json -f "name=$name" 2>/dev/null \
+            | jq -r '.[0].name // ""' 2>/dev/null)" && [ -n "$listed" ] && break
+        sleep 10
+    done
+    if [ -z "$listed" ]; then
         exit 1
     fi
     echo "The install failed, but the realm has $name: waiting for it"
