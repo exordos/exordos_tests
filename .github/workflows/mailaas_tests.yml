@@ -7,9 +7,9 @@ on:
     - cron: "0 5 * * *"
 
 env:
-  PROJECT_ID: ${{ secrets.PROJECT_ID }}
-  USERNAME: ${{ secrets.USERNAME }}
-  USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
+  PROJECT_ID: ${{ secrets.TEST_PROJECT_ID }}
+  USERNAME: ${{ secrets.TEST_USERNAME }}
+  USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
   ENDPOINT: https://exordos.com/api/core
   ELEMENT_NAME: mailaas
   REALM_TTL_HOURS: "2"
