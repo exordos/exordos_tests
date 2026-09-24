@@ -10,6 +10,7 @@ name: element_realm_test
 #     with:
 #       elements: dbaas communal_pg_cluster
 #       version: ${{ needs.Build.outputs.version }}
+#       prepare-script: .github/scripts/overbook-hypervisor.sh
 #       check-script: .github/scripts/check-communal-pg-cluster.sh
 #     secrets: inherit
 
@@ -24,6 +25,13 @@ on:
         description: The version the Build job pushed, installed for every element
         required: true
         type: string
+      prepare-script:
+        description: >-
+          A script in the calling repository to run on the realm before the
+          elements are installed, with the CLI pointed at the realm
+        required: false
+        type: string
+        default: ""
       check-script:
         description: >-
           A script in the calling repository to run once the elements are
@@ -70,7 +78,7 @@ jobs:
           ref: ${{ inputs.tests-ref }}
           path: exordos_tests
       - name: Checkout the element
-        if: ${{ inputs.check-script != '' }}
+        if: ${{ inputs.prepare-script != '' || inputs.check-script != '' }}
         uses: actions/checkout@v7
         with:
           path: element
@@ -97,6 +105,12 @@ jobs:
           exordos settings set-realm default --endpoint "$REALM_CORE_URL"
           exordos settings set-context default --name default \
               --user admin --password "$ADMIN_PASSWORD"
+      - name: prepare_realm
+        if: ${{ inputs.prepare-script != '' }}
+        working-directory: element
+        run: ./"$PREPARE_SCRIPT"
+        env:
+          PREPARE_SCRIPT: ${{ inputs.prepare-script }}
       - name: wait_for_pushed_version
         timeout-minutes: 12
         run: $SCRIPTS/wait-for-repo-version.sh "$VERSION" 600 $ELEMENTS
