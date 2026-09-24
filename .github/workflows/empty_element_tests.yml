@@ -70,7 +70,7 @@ jobs:
           echo "load balancer." >&2
           exit 1
       - name: check_ssh_connection
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: |
           set -uo pipefail
 
@@ -85,8 +85,12 @@ jobs:
           ssh_host="$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')"
           ssh_port="$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')"
 
+          # Stop on a deadline, not a count, so the diagnostics below still
+          # run inside the step's timeout however long each attempt takes.
           start=$SECONDS
-          for i in $(seq 1 60); do
+          i=0
+          while [ $((SECONDS - start)) -lt 600 ]; do
+              i=$((i + 1))
               if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                      -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" \
                      -p "$ssh_port" "ubuntu@$ssh_host" true; then
@@ -94,11 +98,28 @@ jobs:
                        "after $((SECONDS - start))s"
                   exit 0
               fi
-              echo "Waiting for ssh to the realm... ($i/60)"
+              echo "Waiting for ssh to the realm... (attempt $i, $((SECONDS - start))s)"
               sleep 10
           done
 
           echo "The realm did not take the run's ssh key" >&2
+
+          # Which half of the delivery broke: the ecosystem writes one ssh_key
+          # secret per node the realm's own core lists, and the realm's agent
+          # writes that to authorized_keys on the node ssh lands on.
+          child=(exordos --endpoint "$REALM_CORE_URL" --user admin
+                 --password "$ADMIN_PASSWORD")
+          echo "::group::Nodes of the realm's own core"
+          "${child[@]}" compute nodes list || true
+          echo "::endgroup::"
+          echo "::group::ssh_key secrets in the realm's own core"
+          "${child[@]}" secret ssh_keys list || true
+          echo "::endgroup::"
+          echo "::group::Verbose ssh attempt"
+          ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" \
+              -p "$ssh_port" "ubuntu@$ssh_host" true 2>&1 | tail -30 || true
+          echo "::endgroup::"
           exit 1
       - name: point_cli_at_the_realm
         run: |
