@@ -70,9 +70,14 @@ jobs:
           echo "load balancer." >&2
           exit 1
       - name: check_ssh_connection
-        timeout-minutes: 5
+        timeout-minutes: 12
         run: |
           set -uo pipefail
+
+          # A claimed realm booted before the key was supplied: the ecosystem
+          # delivers it afterwards as an ssh_key secret in the realm's own
+          # core, and the realm's agent writes it to authorized_keys, so it
+          # can take a while to be accepted.
 
           ssh_info="$(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID" \
               --user "$USERNAME" --password "$USER_PASSWORD" \
@@ -80,15 +85,17 @@ jobs:
           ssh_host="$(echo "$ssh_info" | jq -r '.[] | select(.field == "host") | .value')"
           ssh_port="$(echo "$ssh_info" | jq -r '.[] | select(.field == "port") | .value')"
 
-          for i in $(seq 1 12); do
+          start=$SECONDS
+          for i in $(seq 1 60); do
               if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                      -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" \
                      -p "$ssh_port" "ubuntu@$ssh_host" true; then
-                  echo "The realm takes the run's key at $ssh_host:$ssh_port"
+                  echo "The realm takes the run's key at $ssh_host:$ssh_port" \
+                       "after $((SECONDS - start))s"
                   exit 0
               fi
-              echo "Waiting for ssh to the realm... ($i/12)"
-              sleep 5
+              echo "Waiting for ssh to the realm... ($i/60)"
+              sleep 10
           done
 
           echo "The realm did not take the run's ssh key" >&2
