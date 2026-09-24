@@ -173,6 +173,18 @@ jobs:
         run: ./"$CHECK_SCRIPT"
         env:
           CHECK_SCRIPT: ${{ inputs.check-script }}
+      # What the realm itself says when something did not come up: an element
+      # waits on nodes, so the nodes, their sets and the hypervisor they have
+      # to fit on are where the reason usually is.
+      - name: realm_diagnostics
+        if: ${{ failure() && env.REALM_CORE_URL != '' }}
+        run: |
+          set +e
+          for what in "ee l" "c h l" "c s l" "c n l"; do
+              echo "::group::exordos $what"
+              exordos $what
+              echo "::endgroup::"
+          done
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
