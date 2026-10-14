@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait until an element reports ACTIVE.
 #
-# Usage: wait-for-element.sh <name> [timeout-seconds] [version-to-leave]
+# Usage: wait-for-element.sh <name> [timeout-seconds] [version-to-leave] [expected-version]
 #
 # `exordos ee l` talks to the core API, which 502s for seconds at a time while
 # an element reconciles -- the core restarts under it.  Read the status into a
@@ -18,6 +18,7 @@ timeout="${2:-900}"
 # record stays ACTIVE on the old version for a few seconds before the core
 # picks the update up, so ACTIVE alone is not proof that anything happened.
 stale_version="${3:-}"
+expected_version="${4:-}"
 
 deadline=$((SECONDS + timeout))
 status=""
@@ -28,11 +29,12 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         | jq -r '.[0] | "\(.status // "") \(.version // "")"' 2>/dev/null || true)"
     case "$status" in
         ACTIVE)
-            if [ -z "$stale_version" ] || [ "$version" != "$stale_version" ]; then
+            if { [ -z "$stale_version" ] || [ "$version" != "$stale_version" ]; } &&
+               { [ -z "$expected_version" ] || [ "$version" = "$expected_version" ]; }; then
                 echo "Element $name is ACTIVE (version ${version:-unknown})"
                 exit 0
             fi
-            echo "Waiting for element $name to move off version $stale_version..."
+            echo "Waiting for element $name version ${expected_version:-other than $stale_version} (current: ${version:-unknown})..."
             ;;
         ERROR)
             echo "Element $name went ERROR" >&2

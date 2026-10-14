@@ -12,7 +12,6 @@ env:
   CORE_USERNAME: "admin"
   CORE_PASSWORD: "admin"
   ELEMENT_NAME: core
-  BASE_CORE_VERSION: 0.2.29
 
 
 jobs:
@@ -21,7 +20,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    if : ${{ github.actor != 'dependabot[bot]' }}
+    if: ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@v7
       - name: Setup `packer`
@@ -30,11 +29,13 @@ jobs:
           version: ${{ env.PACKER_VERSION }}
       - name: Install exordos
         run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Resolve previous and latest releases
+        run: python3 .github/scripts/resolve-update-versions.py "$ELEMENT_NAME" >> "$GITHUB_ENV"
       - name: Install hypervisor
         run: |
           set -eux
           
-          exordos bootstrap -i $BASE_CORE_VERSION -m core --download-only > prefetch.log 2>&1 &
+          exordos bootstrap -i $BASE_ELEMENT_VERSION -m core --download-only > prefetch.log 2>&1 &
           PREFETCH_PID=$!
           
           EXORDOS_BIN=$(which exordos)
@@ -49,43 +50,25 @@ jobs:
           exordos settings set-context default --name default --user $CORE_USERNAME --password $CORE_PASSWORD
       - name: Bootstrap exordos_core
         run:
-          exordos bootstrap -i $BASE_CORE_VERSION -f -m core --admin-password $CORE_PASSWORD --cidr 10.20.0.0/22
-      - name: Wait for Exordos Core API
-        run: |
-          for i in {1..60}; do
-            if exordos ready_api; then
-              echo "Exordos Core API is ready"
-              break
-            fi
-            echo "Waiting for Exordos Core API... ($i/60)"
-            sleep 5
-          done
+          exordos bootstrap -i $BASE_ELEMENT_VERSION -f -m core --admin-password $CORE_PASSWORD --cidr 10.20.0.0/22
+      - name: Verify previous core release
+        timeout-minutes: 10
+        run: .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540 "" "$BASE_ELEMENT_VERSION"
       - name: Set hypervisor with overbooking
         run: |
           HYPER_UUID="$(exordos c h l -o json | jq -r .[0]."uuid")"
           exordos compute hypervisors update $HYPER_UUID --cores-ratio 10.0 --ram-ratio 10.0
-      - name: update exordos_core
-        run: exordos e e update $ELEMENT_NAME -y
-      - name: sleep
-        run: sleep 30
-      - name: Wait for Exordos Core API
-        run: |
-          for i in {1..60}; do
-            if exordos ready_api; then
-              echo "Exordos Core API is ready"
-              break
-            fi
-            echo "Waiting for Exordos Core API... ($i/60)"
-            sleep 5
-          done
-      - name: check exordos core version
-        timeout-minutes: 5
+      - name: Refresh repository
+        timeout-minutes: 10
+        run: .github/scripts/wait-for-repo-version.sh "$TARGET_ELEMENT_VERSION" 540 "$ELEMENT_NAME"
+      - name: Update to latest release
+        run: exordos e e update "$ELEMENT_NAME" -v "$TARGET_ELEMENT_VERSION" -y
+      - name: Verify latest release
+        timeout-minutes: 15
         run: |
           set -eux
-
-          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 240 "$BASE_CORE_VERSION"
-          
-          exordos e e show $ELEMENT_NAME
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 840 "$BASE_ELEMENT_VERSION" "$TARGET_ELEMENT_VERSION"
+          exordos e e show "$ELEMENT_NAME"
       - name: Push test results to VictoriaMetrics
         if: ${{ always() }}
         continue-on-error: true
