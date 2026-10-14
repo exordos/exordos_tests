@@ -7,38 +7,35 @@ import subprocess
 import sys
 
 
-def list_releases(name, endpoint, latest=False):
+def list_releases(name, repo_url):
     command = [
-        "exordos", "--no-check-updates", "--endpoint", endpoint,
-        "repo", "store", "list", "-f", f"name={name}",
-        "-f", "stable=true", "-o", "json",
+        "exordos", "--no-check-updates", "repo", "versions", name,
+        "--repo-url", repo_url, "--stable", "-o", "json",
     ]
-    if latest:
-        command.extend(["-f", "latest=true"])
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
     return json.loads(result.stdout)
 
 
-def resolve_versions(name, endpoint):
+def resolve_versions(name, repo_url):
     stable = re.compile(r"^\d+\.\d+\.\d+$")
 
     def key(version):
         return tuple(map(int, version.split(".")))
 
-    # Query the public store explicitly: the test core is not bootstrapped yet.
+    releases = list_releases(name, repo_url)
     latest_versions = {
-        e["version"] for e in list_releases(name, endpoint, latest=True)
-        if e.get("name") == name and stable.fullmatch(e.get("version", ""))
+        e["version"] for e in releases
+        if e.get("latest") is True and stable.fullmatch(e.get("version", ""))
     }
     if not latest_versions:
-        raise ValueError(f"{name}: no latest stable release in the store")
+        raise ValueError(f"{name}: no latest stable release in the repository")
     latest = max(latest_versions, key=key)
     versions = {
-        e["version"] for e in list_releases(name, endpoint)
-        if e.get("name") == name and stable.fullmatch(e.get("version", ""))
+        e["version"] for e in releases
+        if stable.fullmatch(e.get("version", ""))
     }
     if latest not in versions:
-        raise ValueError(f"{name}: latest {latest} is missing from the store release list")
+        raise ValueError(f"{name}: latest {latest} is missing from the repository release list")
     previous = [v for v in versions if stable.fullmatch(v) and key(v) < key(latest)]
     if not previous:
         raise ValueError(f"{name}: no stable release precedes latest {latest}")
@@ -50,8 +47,10 @@ if __name__ == "__main__":
         base, target = resolve_versions(
             sys.argv[1],
             sys.argv[2].rstrip("/") if len(sys.argv) > 2
-            else "https://exordos.com/api/core",
+            else "https://repo.exordos.com/exordos-elements",
         )
+    except subprocess.CalledProcessError as exc:
+        sys.exit(f"Cannot resolve update versions: {exc.stderr.strip() or exc}")
     except Exception as exc:
         sys.exit(f"Cannot resolve update versions: {exc}")
     print(f"BASE_ELEMENT_VERSION={base}")
