@@ -96,7 +96,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
       - name: Setup upterm session
-        uses: owenthereal/action-upterm@v1
+        uses: owenthereal/action-upterm@v2
         if: ${{ failure() }}
         with:
           limit-access-to-actor: true

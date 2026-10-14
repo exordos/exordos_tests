@@ -137,7 +137,7 @@ jobs:
         env:
           CHECK_SCRIPT: ${{ inputs.check-script }}
       - name: Setup upterm session
-        uses: owenthereal/action-upterm@v1
+        uses: owenthereal/action-upterm@v2
         if: ${{ failure() }}
         with:
           limit-access-to-actor: true
