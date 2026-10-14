@@ -9,7 +9,7 @@ import sys
 
 def list_releases(name, repo_url):
     command = [
-        "exordos", "--no-check-updates", "repo", "versions", name,
+        "exordos", "--silent", "--no-check-updates", "repo", "versions", name,
         "--repo-url", repo_url, "--stable", "-o", "json",
     ]
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
