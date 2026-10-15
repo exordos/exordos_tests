@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait until an element reports ACTIVE.
 #
-# Usage: wait-for-element.sh <name> [timeout-seconds] [version-to-leave] [expected-version]
+# Usage: wait-for-element.sh <name> [timeout-seconds] [version-to-leave] [expected-version] [--show]
 #
 # `exordos ee l` talks to the core API, which 502s for seconds at a time while
 # an element reconciles -- the core restarts under it.  Read the status into a
@@ -19,6 +19,9 @@ timeout="${2:-900}"
 # picks the update up, so ACTIVE alone is not proof that anything happened.
 stale_version="${3:-}"
 expected_version="${4:-}"
+# Fetch details within the same retry loop: core can reboot after its record
+# first becomes ACTIVE, interrupting the extra API requests made by `show`.
+show_details="${5:-}"
 
 deadline=$((SECONDS + timeout))
 status=""
@@ -31,10 +34,15 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         ACTIVE)
             if { [ -z "$stale_version" ] || [ "$version" != "$stale_version" ]; } &&
                { [ -z "$expected_version" ] || [ "$version" = "$expected_version" ]; }; then
-                echo "Element $name is ACTIVE (version ${version:-unknown})"
-                exit 0
+                if [ "$show_details" = "--show" ] && ! exordos e e show "$name"; then
+                    echo "Waiting for element $name details: the API did not answer"
+                else
+                    echo "Element $name is ACTIVE (version ${version:-unknown})"
+                    exit 0
+                fi
+            else
+                echo "Waiting for element $name version ${expected_version:-other than $stale_version} (current: ${version:-unknown})..."
             fi
-            echo "Waiting for element $name version ${expected_version:-other than $stale_version} (current: ${version:-unknown})..."
             ;;
         ERROR)
             echo "Element $name went ERROR" >&2

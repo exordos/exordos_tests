@@ -67,8 +67,7 @@ jobs:
         timeout-minutes: 15
         run: |
           set -eux
-          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 840 "$BASE_ELEMENT_VERSION" "$TARGET_ELEMENT_VERSION"
-          exordos e e show "$ELEMENT_NAME"
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 840 "$BASE_ELEMENT_VERSION" "$TARGET_ELEMENT_VERSION" --show
       - name: Push test results to VictoriaMetrics
         if: ${{ always() }}
         continue-on-error: true
