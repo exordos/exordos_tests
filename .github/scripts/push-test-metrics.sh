@@ -62,9 +62,9 @@ exordos_tests_run_info{$labels,result=\"$(esc "$job_status")\",run_id=\"$GITHUB_
 "
 
 # Job duration and per-step results come from the GitHub API.  The job is
-# matched by name: jobs here have no `name:`, so the display name is the
-# job id.  The step running this script is still in progress and is left
-# out (it has no conclusion yet).
+# matched by name: reusable workflows prefix the job id with the caller's
+# job name ("caller / Test"). The step running this script is still in
+# progress and is left out (it has no conclusion yet).
 jobs_json=""
 if [ -n "${GH_TOKEN:-}" ]; then
     jobs_json="$(gh api \
@@ -76,7 +76,7 @@ if [ -n "$jobs_json" ]; then
     payload+="$(jq -r --arg job "$GITHUB_JOB" --arg labels "$labels" '
         def esc: gsub("\\\\"; "\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n");
         def secs: sub("\\.[0-9]+"; "") | fromdateiso8601;
-        (.jobs[] | select(.name == $job)) as $j
+        (.jobs[] | select(.name == $job or (.name | endswith(" / " + $job)))) as $j
         | (
             "exordos_tests_run_duration_seconds{\($labels)} \(now - ($j.started_at | secs) | floor)",
             ($j.steps[]

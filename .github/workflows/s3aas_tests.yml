@@ -6,84 +6,13 @@ on:
     # at 04:00 every day.
     - cron: "0 4 * * *"
 
-env:
-  PACKER_VERSION: "1.9.2"
-  CORE_ENDPOINT_URL: http://10.20.0.2:80/api/core
-  CORE_USERNAME: "admin"
-  CORE_PASSWORD: "admin"
-  ELEMENT_NAME: s3aas
-  BASE_CORE_VERSION: latest
-
 jobs:
   s3aas_Tests:
-    runs-on: ubuntu-24.04
+    if: ${{ github.actor != 'dependabot[bot]' }}
     permissions:
       contents: read
       actions: read
-    if: ${{ github.actor != 'dependabot[bot]' }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Setup `packer`
-        uses: hashicorp/setup-packer@main
-        with:
-          version: ${{ env.PACKER_VERSION }}
-      - name: Install exordos
-        run: curl -fsSL https://repo.exordos.com/install.sh | sh
-      - name: Install hypervisor
-        run: |
-          set -eux
-          
-          exordos bootstrap -i $BASE_CORE_VERSION -m core --download-only > prefetch.log 2>&1 &
-          PREFETCH_PID=$!
-          
-          EXORDOS_BIN=$(which exordos)
-          sudo $EXORDOS_BIN compute hypervisors init --connection-uri qemu+tcp://10.20.0.1/system
-          sudo chmod 666 /dev/kvm
-          
-          wait $PREFETCH_PID || { cat prefetch.log; exit 1; }
-          cat prefetch.log
-      - name: set exordos config
-        run: |
-          exordos settings set-realm default --endpoint $CORE_ENDPOINT_URL
-          exordos settings set-context default --name default --user $CORE_USERNAME --password $CORE_PASSWORD
-      - name: Bootstrap exordos_core
-        run:
-          exordos bootstrap -i $BASE_CORE_VERSION -f -m core --admin-password $CORE_PASSWORD --cidr 10.20.0.0/22
-      - name: Wait for Exordos Core API
-        run: |
-          for i in {1..60}; do
-            if exordos ready_api; then
-              echo "Exordos Core API is ready"
-              break
-            fi
-            echo "Waiting for Exordos Core API... ($i/60)"
-            sleep 5
-          done
-      - name: Set hypervisor with overbooking
-        run: |
-          HYPER_UUID="$(exordos c h l -o json | jq -r .[0]."uuid")"
-          exordos compute hypervisors update $HYPER_UUID --cores-ratio 10.0 --ram-ratio 10.0
-      - name: install s3aas
-        run: exordos e e install $ELEMENT_NAME
-      - name: check exordos s3aas
-        timeout-minutes: 10
-        run: |
-          set -eux
-
-          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 540
-
-          exordos e e show $ELEMENT_NAME
-          exordos e e l
-      - name: Push test results to VictoriaMetrics
-        if: ${{ always() }}
-        continue-on-error: true
-        env:
-          VM_IMPORT_URL: ${{ secrets.VM_IMPORT_URL }}
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
-      - name: Setup upterm session
-        uses: owenthereal/action-upterm@v2
-        if: ${{ failure() }}
-        with:
-          limit-access-to-actor: true
-          wait-timeout-minutes: 15
+    uses: ./.github/workflows/element_realm_tests.yml
+    with:
+      element: s3aas
+    secrets: inherit

@@ -1,0 +1,121 @@
+name: element_realm_tests
+
+on:
+  workflow_call:
+    inputs:
+      element:
+        description: Element to test
+        required: true
+        type: string
+      update:
+        description: Test an update from the previous stable release to latest
+        type: boolean
+        default: false
+    secrets:
+      TEST_PROJECT_ID:
+        required: true
+      TEST_USERNAME:
+        required: true
+      TEST_USER_PASSWORD:
+        required: true
+      VM_IMPORT_URL:
+        required: false
+
+env:
+  PROJECT_ID: ${{ secrets.TEST_PROJECT_ID }}
+  USERNAME: ${{ secrets.TEST_USERNAME }}
+  USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+  ELEMENT_NAME: ${{ inputs.element }}
+  REALM_TTL_HOURS: "2"
+
+jobs:
+  Test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Resolve previous and latest releases
+        if: ${{ inputs.update }}
+        run: python3 .github/scripts/resolve-update-versions.py "$ELEMENT_NAME" >> "$GITHUB_ENV"
+      - name: get_realm
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+
+          REALM_NAME="$ELEMENT_NAME${{ inputs.update && '-update' || '' }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
+
+          # A key of this run's own, so the realm can be reached over ssh.
+          SSH_KEY="$RUNNER_TEMP/realm_key"
+          ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
+          echo "SSH_KEY=$SSH_KEY" >> "$GITHUB_ENV"
+
+          got="$(SSH_PUBLIC_KEY="$SSH_KEY.pub" \
+              .github/scripts/get-realm.sh "$REALM_NAME" "$REALM_TTL_HOURS")"
+
+          echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
+          echo "$got" >> "$GITHUB_ENV"
+          echo "$got" | grep -v '^ADMIN_PASSWORD='
+      - name: wait_for_realm_api
+        timeout-minutes: 10
+        run: .github/scripts/wait-for-realm-api.sh "$REALM_DOMAIN" 540 >> "$GITHUB_ENV"
+      - name: check_ssh_connection
+        timeout-minutes: 15
+        run: .github/scripts/check-realm-ssh.sh "$REALM_UUID" "$SSH_KEY" 600
+      - name: point_cli_at_the_realm
+        run: |
+          set -euo pipefail
+
+          exordos settings set-realm default --endpoint "$REALM_CORE_URL"
+          exordos settings set-context default --name default \
+              --user admin --password "$ADMIN_PASSWORD"
+      - name: Install latest release
+        if: ${{ !inputs.update }}
+        timeout-minutes: 10
+        run: |
+          .github/scripts/install-element.sh "$ELEMENT_NAME" "" 540
+          exordos e e l
+      - name: Wait for previous release in repository
+        if: ${{ inputs.update }}
+        timeout-minutes: 10
+        run: .github/scripts/wait-for-repo-version.sh "$BASE_ELEMENT_VERSION" 540 "$ELEMENT_NAME"
+      - name: Install previous release
+        if: ${{ inputs.update }}
+        timeout-minutes: 15
+        run: .github/scripts/install-element.sh "$ELEMENT_NAME" "$BASE_ELEMENT_VERSION" 840
+      - name: Refresh repository
+        if: ${{ inputs.update }}
+        timeout-minutes: 10
+        run: .github/scripts/wait-for-repo-version.sh "$TARGET_ELEMENT_VERSION" 540 "$ELEMENT_NAME"
+      - name: Update to latest release
+        if: ${{ inputs.update }}
+        run: exordos e e update "$ELEMENT_NAME" -v "$TARGET_ELEMENT_VERSION" -y
+      - name: Verify latest release
+        if: ${{ inputs.update }}
+        timeout-minutes: 15
+        run: |
+          set -eux
+          .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 840 "$BASE_ELEMENT_VERSION" "$TARGET_ELEMENT_VERSION"
+          exordos e e show "$ELEMENT_NAME"
+      - name: Push test results to VictoriaMetrics
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          VM_IMPORT_URL: ${{ secrets.VM_IMPORT_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/push-test-metrics.sh "${{ job.status }}"
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v2
+        if: ${{ failure() }}
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: ${{ inputs.update && 30 || 15 }}
+      - name: delete_realm
+        if: ${{ always() }}
+        run: .github/scripts/delete-realm.sh
