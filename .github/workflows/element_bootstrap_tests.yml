@@ -96,9 +96,9 @@ jobs:
           exordos compute hypervisors update $HYPER_UUID --cores-ratio 10.0 --ram-ratio 10.0
       - name: Install latest release
         if: ${{ !inputs.update }}
-        timeout-minutes: 10
+        timeout-minutes: 11
         run: |
-          .github/scripts/install-element.sh "$ELEMENT_NAME" "" 540
+          .github/scripts/install-element.sh "$ELEMENT_NAME" "" 600
           exordos e e l
       - name: Refresh repository
         if: ${{ inputs.update }}
