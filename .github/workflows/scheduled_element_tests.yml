@@ -1,0 +1,80 @@
+name: scheduled_element_tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      element:
+        description: Element to test (only configured combinations are run)
+        type: choice
+        default: all
+        options:
+          - all
+          - core
+          - world
+          - s3aas
+          - mailaas
+          - empty
+          - dbaas
+      mode:
+        description: Test mode
+        type: choice
+        default: all
+        options:
+          - all
+          - install
+          - update
+  schedule:
+    # UTC. Keep these triggers in sync with element-tests.json at the repository root.
+    - cron: "0 2 * * *"
+    - cron: "0 3 * * *"
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
+    - cron: "0 6 * * *"
+    - cron: "0 7 * * *"
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  select:
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    outputs:
+      realm: ${{ steps.tests.outputs.realm }}
+      bootstrap: ${{ steps.tests.outputs.bootstrap }}
+      has-realm: ${{ steps.tests.outputs.has-realm }}
+      has-bootstrap: ${{ steps.tests.outputs.has-bootstrap }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select tests
+        id: tests
+        run: python3 .github/scripts/select-element-tests.py
+
+  realm:
+    name: ${{ matrix.element }} / ${{ matrix.update && 'update' || 'install' }}
+    needs: select
+    if: ${{ needs.select.outputs.has-realm == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.realm) }}
+    uses: ./.github/workflows/element_realm_tests.yml
+    with:
+      element: ${{ matrix.element }}
+      update: ${{ matrix.update }}
+    secrets: inherit
+
+  bootstrap:
+    name: ${{ matrix.element }} / ${{ matrix.update && 'update' || 'install' }}
+    needs: select
+    if: ${{ needs.select.outputs.has-bootstrap == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.bootstrap) }}
+    uses: ./.github/workflows/element_bootstrap_tests.yml
+    with:
+      element: ${{ matrix.element }}
+      update: ${{ matrix.update }}
+      free-disk-space: ${{ matrix.free-disk-space || false }}
+    secrets: inherit

@@ -1,0 +1,9 @@
+[
+  {"element": "core", "update": true, "backend": "bootstrap", "cron": "0 2 * * *"},
+  {"element": "world", "update": false, "backend": "bootstrap", "free-disk-space": true, "cron": "0 3 * * *"},
+  {"element": "s3aas", "update": false, "backend": "realm", "cron": "0 4 * * *"},
+  {"element": "mailaas", "update": false, "backend": "realm", "cron": "0 5 * * *"},
+  {"element": "empty", "update": false, "backend": "realm", "cron": "0 6 * * *"},
+  {"element": "s3aas", "update": true, "backend": "realm", "cron": "0 7 * * *"},
+  {"element": "dbaas", "update": true, "backend": "realm", "cron": "0 8 * * *"}
+]
