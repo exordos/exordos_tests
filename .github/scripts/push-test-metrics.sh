@@ -15,6 +15,8 @@
 #                   Optional Basic Auth, for a write path behind a proxy.
 #   ELEMENT_NAME, BASE_CORE_VERSION
 #                   Copied into labels when the workflow sets them.
+#   TEST_WORKFLOW   Test identity for reusable workflows; defaults to the
+#                   caller's GITHUB_WORKFLOW.
 #   GH_TOKEN        Token for the GitHub API (needs `actions: read`), used
 #                   for the job duration and per-step results.  Without it
 #                   only the job result is pushed.
@@ -47,7 +49,7 @@ esc() {
 }
 
 labels="repository=\"$(esc "$GITHUB_REPOSITORY")\""
-labels+=",workflow=\"$(esc "$GITHUB_WORKFLOW")\""
+labels+=",workflow=\"$(esc "${TEST_WORKFLOW:-$GITHUB_WORKFLOW}")\""
 labels+=",job=\"$(esc "$GITHUB_JOB")\""
 labels+=",branch=\"$(esc "$GITHUB_REF_NAME")\""
 labels+=",event=\"$(esc "$GITHUB_EVENT_NAME")\""
@@ -62,8 +64,8 @@ exordos_tests_run_info{$labels,result=\"$(esc "$job_status")\",run_id=\"$GITHUB_
 "
 
 # Job duration and per-step results come from the GitHub API.  The job is
-# matched by name: reusable workflows prefix the job id with the caller's
-# job name ("caller / Test"). The step running this script is still in
+# matched by runner as well as name: matrix jobs in reusable workflows all
+# have the same job id ("Test"). The step running this script is still in
 # progress and is left out (it has no conclusion yet).
 jobs_json=""
 if [ -n "${GH_TOKEN:-}" ]; then
@@ -73,10 +75,11 @@ if [ -n "${GH_TOKEN:-}" ]; then
 fi
 
 if [ -n "$jobs_json" ]; then
-    payload+="$(jq -r --arg job "$GITHUB_JOB" --arg labels "$labels" '
+    payload+="$(jq -r --arg job "$GITHUB_JOB" --arg runner "${RUNNER_NAME:-}" --arg labels "$labels" '
         def esc: gsub("\\\\"; "\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n");
         def secs: sub("\\.[0-9]+"; "") | fromdateiso8601;
         (.jobs[] | select(.name == $job or (.name | endswith(" / " + $job)))) as $j
+        | select($runner != "" and $j.runner_name == $runner)
         | (
             "exordos_tests_run_duration_seconds{\($labels)} \(now - ($j.started_at | secs) | floor)",
             ($j.steps[]

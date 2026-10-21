@@ -27,6 +27,7 @@ env:
   USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
   ENDPOINT: https://exordos.com/api/core
   ELEMENT_NAME: ${{ inputs.element }}
+  TEST_WORKFLOW: element_realm_tests / ${{ inputs.element }} / ${{ inputs.update && 'update' || 'install' }}
   REALM_TTL_HOURS: "2"
 
 jobs:
