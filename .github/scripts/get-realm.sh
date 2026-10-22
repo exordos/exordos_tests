@@ -24,6 +24,8 @@ set -uo pipefail
 name="$1"
 ttl_hours="${2:-2}"
 cold_timeout="${3:-660}"
+# Use the same size for warm claims and the cold-order fallback (RAM in MB).
+realm_size=(--node-cores 8 --node-ram 16384)
 
 : "${ENDPOINT:?ENDPOINT is not set}"
 : "${PROJECT_ID:?PROJECT_ID is not set}"
@@ -53,7 +55,7 @@ field() {
 }
 
 claimed="$("${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
-    "${ssh_key[@]}" -o json 2>/dev/null)"
+    "${realm_size[@]}" "${ssh_key[@]}" -o json 2>/dev/null)"
 rc=$?
 
 if [ "$rc" -eq 0 ]; then
@@ -68,7 +70,7 @@ fi
 if [ "$rc" -ne "$POOL_EMPTY_EXIT_CODE" ]; then
     echo "Claim failed with exit code $rc" >&2
     "${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
-        "${ssh_key[@]}" >&2
+        "${realm_size[@]}" "${ssh_key[@]}" >&2
     exit "$rc"
 fi
 
@@ -80,16 +82,13 @@ echo "The pool was empty, ordering a realm instead" >&2
 uuid="$(uuidgen)"
 admin_password="$(openssl rand -hex 16)"
 
-# Sizing is left out on purpose: the defaults are what the pool is warmed
-# from, so an ordered realm matches a claimed one.
-#
 # The output is scrubbed rather than passed through: some of the CLI's errors
 # quote the whole request back, the password with it, and the caller cannot
 # have masked it yet -- it was generated here, moments ago.
 add_log="$(mktemp)"
 trap 'rm -f "$add_log"' EXIT
 if ! "${exo[@]}" realms add --uuid "$uuid" --name "$name" \
-        --admin-password "$admin_password" "${ssh_key[@]}" \
+        --admin-password "$admin_password" "${realm_size[@]}" "${ssh_key[@]}" \
         > "$add_log" 2>&1; then
     sed "s/$admin_password/***/g" "$add_log" >&2
     echo "Could not order a realm" >&2
