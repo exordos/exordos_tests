@@ -27,6 +27,16 @@ cold_timeout="${3:-660}"
 # Use the same size for warm claims and the cold-order fallback (RAM in MB).
 realm_size=(--node-cores 8 --node-ram 16384)
 
+# Reusable workflows inherit the caller's workflow and run context. Include
+# the realm name to distinguish parallel element jobs sharing the same job id.
+claim_description=()
+if [ -n "${GITHUB_RUN_ID:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    description="CI: ${GITHUB_REPOSITORY} | ${GITHUB_WORKFLOW:-unknown} | job=${GITHUB_JOB:-unknown} | realm=$name"
+    description+=" | ref=${GITHUB_REF_NAME:-unknown} | sha=${GITHUB_SHA:-unknown}"
+    description+=" | ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}"
+    claim_description=(--description "$description")
+fi
+
 : "${ENDPOINT:?ENDPOINT is not set}"
 : "${PROJECT_ID:?PROJECT_ID is not set}"
 : "${USERNAME:?USERNAME is not set}"
@@ -55,7 +65,7 @@ field() {
 }
 
 claimed="$("${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
-    "${realm_size[@]}" "${ssh_key[@]}" -o json 2>/dev/null)"
+    "${realm_size[@]}" "${claim_description[@]}" "${ssh_key[@]}" -o json 2>/dev/null)"
 rc=$?
 
 if [ "$rc" -eq 0 ]; then
@@ -70,7 +80,7 @@ fi
 if [ "$rc" -ne "$POOL_EMPTY_EXIT_CODE" ]; then
     echo "Claim failed with exit code $rc" >&2
     "${exo[@]}" realms claim --name "$name" --ttl-hours "$ttl_hours" \
-        "${realm_size[@]}" "${ssh_key[@]}" >&2
+        "${realm_size[@]}" "${claim_description[@]}" "${ssh_key[@]}" >&2
     exit "$rc"
 fi
 
