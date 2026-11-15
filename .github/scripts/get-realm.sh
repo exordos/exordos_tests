@@ -111,7 +111,7 @@ if ! .github/scripts/wait-for-realm.sh "$uuid" "$cold_timeout" >&2; then
     exit 1
 fi
 
-domain="$("${exo[@]}" realms show "$uuid" -o json 2>/dev/null | field domain)"
+domain="$("${exo[@]}" realms show "$uuid" -o json 2>/dev/null | jq -r '.domain // empty')"
 if [ -z "$domain" ]; then
     echo "The ordered realm reports no domain" >&2
     exit 1

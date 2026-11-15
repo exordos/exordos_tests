@@ -31,7 +31,7 @@ status=""
 
 while [ "$SECONDS" -lt "$deadline" ]; do
     status="$("${exo[@]}" realms show "$name" -o json 2>/dev/null \
-        | jq -r '.[] | select(.field == "status") | .value' 2>/dev/null || true)"
+        | jq -r '.status // empty' 2>/dev/null || true)"
     case "$status" in
         ACTIVE)
             echo "Realm $name is ACTIVE"
@@ -45,7 +45,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
             exit 1
             ;;
     esac
-    echo "Waiting for realm $name... (${status:-no status: the API did not answer})"
+    echo "Waiting for realm $name... (${status:-no status: API request or status parsing failed})"
     sleep 5
 done
 
