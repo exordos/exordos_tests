@@ -25,7 +25,7 @@ exo=(exordos --endpoint "$ENDPOINT" --project-id "$PROJECT_ID"
 realm="${REALM_UUID:-}"
 if [ -z "$realm" ] && [ -n "${REALM_NAME:-}" ]; then
     realm="$("${exo[@]}" realms show "$REALM_NAME" -o json 2>/dev/null \
-        | jq -r '.[] | select(.field == "uuid") | .value' 2>/dev/null || true)"
+        | jq -r '.uuid // empty' 2>/dev/null || true)"
 fi
 
 if [ -z "$realm" ]; then
