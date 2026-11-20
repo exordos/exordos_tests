@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+from urllib import error, parse, request
 
 import boto3
 from botocore.config import Config
@@ -121,6 +122,39 @@ def run_data_check(state, write):
         proc.wait(timeout=10)
 
 
+
+def attach_policy(instance_uuid, user_uuid, policy_uuid):
+    # The CLI sends a UUID, but this API generates it and marks it read-only.
+    core = os.environ['REALM_CORE_URL'].rstrip('/')
+    token_request = request.Request(
+        core + '/v1/iam/clients/default/actions/get_token/invoke',
+        data=parse.urlencode({'grant_type': 'password', 'username': 'admin',
+                              'password': os.environ['ADMIN_PASSWORD'],
+                              'scope': f'project:{PROJECT}'}).encode(),
+    )
+    token = ''
+    try:
+        with request.urlopen(token_request, timeout=30) as response:
+            token = json.load(response)['access_token']
+        instance = f'/v1/types/s3/instances/{instance_uuid}'
+        url = parse.urljoin(core, '/api/metapaas') + f'{instance}/users/{user_uuid}/policies/'
+        body = {'project_id': PROJECT, 'instance': instance,
+                'user': f'{instance}/users/{user_uuid}',
+                'policy': f'{instance}/policies/{policy_uuid}'}
+        api_request = request.Request(url, data=json.dumps(body).encode(), method='POST',
+                                      headers={'Authorization': f'Bearer {token}',
+                                               'Content-Type': 'application/json'})
+        with request.urlopen(api_request, timeout=60) as response:
+            response.read()
+    except error.HTTPError as exc:
+        # The error body describes the API validation; do not expose the token.
+        detail = exc.read().decode('utf-8', errors='replace')[:4000]
+        for secret in (os.environ['ADMIN_PASSWORD'], token):
+            if secret:
+                detail = detail.replace(secret, '[redacted]')
+        raise RuntimeError(f'Policy attachment API failed (HTTP {exc.code}): {detail}') from None
+
+
 def seed():
     obj = instance()
     uuid = obj['uuid']
@@ -131,8 +165,7 @@ def seed():
     policy = cli('metapaas', 's3', 'policies', 'add', *common, '-n', 'element-update-test',
         '--content', json.dumps({'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow',
         'Action': ['s3:*'], 'Resource': [f'arn:aws:s3:::{BUCKET}', f'arn:aws:s3:::{BUCKET}/*']}]}))
-    cli('metapaas', 's3', 'user-policies', 'add', *common, '--user-uuid', user['uuid'],
-        '--policy', policy['uuid'])
+    attach_policy(uuid, user['uuid'], policy['uuid'])
     key = cli('metapaas', 's3', 'keys', 'add', *common, '--user-uuid', user['uuid'])
     state = {'instance': uuid, 'access_key': key['access_key'], 'secret_key': key['secret_key']}
     fd = os.open(STATE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
