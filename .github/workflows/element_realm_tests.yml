@@ -90,6 +90,10 @@ jobs:
         if: ${{ inputs.update }}
         timeout-minutes: 15
         run: .github/scripts/install-element.sh "$ELEMENT_NAME" "$BASE_ELEMENT_VERSION" 840
+      - name: Prepare element update checks
+        if: ${{ inputs.update }}
+        timeout-minutes: 50
+        run: bash .github/scripts/run-element-update-hook.sh prepare
       - name: Refresh repository
         if: ${{ inputs.update }}
         timeout-minutes: 10
@@ -104,6 +108,10 @@ jobs:
           set -eux
           .github/scripts/wait-for-element.sh "$ELEMENT_NAME" 840 "$BASE_ELEMENT_VERSION" "$TARGET_ELEMENT_VERSION"
           exordos e e show "$ELEMENT_NAME"
+      - name: Verify element update checks
+        if: ${{ inputs.update }}
+        timeout-minutes: 20
+        run: bash .github/scripts/run-element-update-hook.sh verify
       - name: Push test results to VictoriaMetrics
         if: ${{ always() }}
         continue-on-error: true
