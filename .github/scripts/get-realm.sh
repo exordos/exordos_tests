@@ -31,9 +31,17 @@ realm_size=(--node-cores 8 --node-ram 16384)
 # the realm name to distinguish parallel element jobs sharing the same job id.
 claim_description=()
 if [ -n "${GITHUB_RUN_ID:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    description="CI: ${GITHUB_REPOSITORY} | ${GITHUB_WORKFLOW:-unknown} | job=${GITHUB_JOB:-unknown} | realm=$name"
+    run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}"
+    description="CI: $run_url"
+    # Realm inherits ModelWithNameDesc's 255-character limit. Keep the run
+    # link intact and trim only the contextual labels, which the run also has.
+    if [ "${#description}" -gt 255 ]; then
+        echo "CI run URL exceeds the realm description limit" >&2
+        exit 1
+    fi
+    description+=" | realm=$name | job=${GITHUB_JOB:-unknown} | ${GITHUB_WORKFLOW:-unknown}"
     description+=" | ref=${GITHUB_REF_NAME:-unknown} | sha=${GITHUB_SHA:-unknown}"
-    description+=" | ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}"
+    description="${description:0:255}"
     claim_description=(--description "$description")
 fi
 
