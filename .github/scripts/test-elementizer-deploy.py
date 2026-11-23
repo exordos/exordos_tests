@@ -244,7 +244,7 @@ class Run:
             'No compilation, server process, database, external services or secrets are '
             'needed. Provide public access on a dedicated address in the realm domain '
             'zone. Application version is 0.1.0.',
-            'minimal': True, 'deploy': True, 'diagnose': False,
+            'minimal': True, 'deploy': True,
             'realm': {'api': {'url': realm}, 'repository': repo},
         })
         build_id = str(uuid.UUID(build['uuid']))
