@@ -19,7 +19,43 @@ import uuid
 
 
 class Failure(Exception):
-    pass
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details
+
+
+def redact(value, token=None):
+    secrets = [token, *(os.environ.get(key) for key in
+                       ('ADMIN_PASSWORD', 'USER_PASSWORD', 'TEST_USER_PASSWORD'))]
+    if isinstance(value, dict):
+        return {redact(key, token): redact(item, token) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item, token) for item in value]
+    if isinstance(value, str):
+        for secret in sorted(filter(None, secrets), key=len, reverse=True):
+            # Also cover JSON quoted values embedded inside plain-text errors.
+            for form in (json.dumps(secret)[1:-1], secret):
+                value = value.replace(form, '[REDACTED]')
+    return value
+
+
+def http_failure(message, url, token, data=None, status=None, body=None):
+    details = {'method': 'GET' if data is None else 'POST', 'url': url}
+    if status is not None:
+        details['status'] = status
+    if body is not None:
+        try:
+            response = json.loads(body)
+        except (ValueError, UnicodeError):
+            response = body.decode('utf-8', errors='replace')
+        # Redact before serializing or truncating so escaping and cut-off
+        # secrets cannot defeat replacement. Keep diagnostics bounded.
+        response = redact(response, token)
+        encoded = json.dumps(response, ensure_ascii=True)
+        details['response'] = response if len(encoded) <= 16384 else encoded[:16384]
+        details['response_truncated'] = len(encoded) > 16384
+    details = redact(details, token)
+    return Failure(message + ': ' + json.dumps(details, ensure_ascii=True), details)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -44,17 +80,18 @@ def request(url, token=None, data=None, content_type='application/json'):
         with error:
             return error.code, error.headers, error.read(2 * 1024 * 1024)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise Failure(f'HTTP transport failed ({type(error).__name__})') from None
+        raise http_failure(f'HTTP transport failed ({type(error).__name__})',
+                           url, token, data) from None
 
 
 def api(url, token, data=None):
     status, _, body = request(url, token, data)
     if status not in (200, 201, 202):
-        raise Failure(f'API returned HTTP {status}')
+        raise http_failure(f'API returned HTTP {status}', url, token, data, status, body)
     try:
         return json.loads(body)
     except ValueError:
-        raise Failure('API did not return JSON') from None
+        raise http_failure('API did not return JSON', url, token, data, status, body) from None
 
 
 def repository(records, realm):
@@ -122,10 +159,7 @@ class Run:
         self.build_url = None
 
     def save(self, name, value):
-        text = json.dumps(value, indent=2, ensure_ascii=False)
-        for secret in (self.token, os.environ.get('ADMIN_PASSWORD')):
-            if secret:
-                text = text.replace(secret, '[REDACTED]')
+        text = json.dumps(redact(value, self.token), indent=2, ensure_ascii=False)
         (self.output / name).write_text(text + '\n')
 
     def latest_plan(self):
@@ -198,9 +232,11 @@ class Run:
     def execute(self, realm, timeout, http_timeout):
         marker = 'elementizer-smoke-' + uuid.uuid4().hex
         repo = repository(api(realm + '/v1/repo/repositories/', self.token), realm)
-        status, _, _ = request(repo['url'] + f'/exordos-elements/{marker}/0.1.0/inventory.json', self.token)
+        inventory_url = repo['url'] + f'/exordos-elements/{marker}/0.1.0/inventory.json'
+        status, _, body = request(inventory_url, self.token)
         if status != 404:
-            raise Failure(f'Repository preflight expected 404, got {status}')
+            raise http_failure('Repository preflight expected 404', inventory_url,
+                               self.token, status=status, body=body)
         build = api(self.endpoint + '/builds/', self.token, {
             'name': marker,
             'description': 'Publish the supplied static site. index.html and probe.txt '
@@ -218,9 +254,10 @@ class Run:
         api(self.build_url + '/actions/answers/invoke', self.token,
             {'answers': {'element_name': marker, 'element_version': '0.1.0'}})
         body, content_type = fixture(marker)
-        status, _, _ = request(self.build_url + '/actions/upload/invoke', self.token, body, content_type)
+        upload_url = self.build_url + '/actions/upload/invoke'
+        status, _, response = request(upload_url, self.token, body, content_type)
         if status not in (200, 201, 202):
-            raise Failure(f'Upload returned HTTP {status}')
+            raise http_failure('Upload failed', upload_url, self.token, body, status, response)
         plan = self.wait(timeout)
         self.save('wrapping.json', api(self.build_url + '/actions/wrapping', self.token))
         url = self.verify(plan, marker, http_timeout)
@@ -250,10 +287,14 @@ def main():
         run = Run(args.endpoint, issue_token(realm), args.output)
         run.execute(realm, args.timeout, args.http_timeout)
     except (Failure, ValueError, KeyError, subprocess.TimeoutExpired) as error:
-        # API bodies and subprocess output can contain credentials: never dump them.
+        # HTTP failures already contain sanitized diagnostics; other exception
+        # messages and subprocess output may contain credentials.
         message = str(error) if isinstance(error, Failure) else type(error).__name__
         if run:
-            run.save('result.json', {'success': False, 'error': message})
+            result = {'success': False, 'error': message}
+            if isinstance(error, Failure) and error.details is not None:
+                result['request'] = error.details
+            run.save('result.json', result)
             run.diagnostics()
         print(f'Deployment test failed: {message}', flush=True)
         return 1
