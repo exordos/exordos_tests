@@ -1,0 +1,61 @@
+name: elementizer_deploy_test
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      TEST_PROJECT_ID:
+        required: true
+      TEST_USERNAME:
+        required: true
+      TEST_USER_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ secrets.TEST_PROJECT_ID }}
+  USERNAME: ${{ secrets.TEST_USERNAME }}
+  USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+  ENDPOINT: https://exordos.com/api/core
+
+jobs:
+  Deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: exordos/exordos_tests
+          ref: ${{ github.repository == 'exordos/exordos_tests' && github.sha || 'master' }}
+      - name: Install exordos
+        run: curl -fsSL https://repo.exordos.com/install.sh | sh
+      - name: Get realm
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          REALM_NAME="elementizer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "REALM_NAME=$REALM_NAME" >> "$GITHUB_ENV"
+          got="$(.github/scripts/get-realm.sh "$REALM_NAME" 4)"
+          echo "::add-mask::$(echo "$got" | sed -n 's/^ADMIN_PASSWORD=//p')"
+          echo "$got" >> "$GITHUB_ENV"
+          echo "$got" | grep -v '^ADMIN_PASSWORD='
+      - name: Wait for realm API
+        timeout-minutes: 6
+        run: .github/scripts/wait-for-realm-api.sh "$REALM_DOMAIN" 300 >> "$GITHUB_ENV"
+      - name: Deploy and verify HTML
+        timeout-minutes: 130
+        run: python3 .github/scripts/test-elementizer-deploy.py
+      - name: Delete realm
+        if: ${{ always() }}
+        timeout-minutes: 5
+        run: .github/scripts/delete-realm.sh
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: elementizer-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: elementizer-results/
+          if-no-files-found: ignore
+          retention-days: 7
