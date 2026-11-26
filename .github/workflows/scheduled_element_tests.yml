@@ -15,6 +15,7 @@ on:
           - mailaas
           - empty
           - dbaas
+          - elementizer
       mode:
         description: Test mode
         type: choice
@@ -32,6 +33,7 @@ on:
     - cron: "0 6 * * *"
     - cron: "0 7 * * *"
     - cron: "0 8 * * *"
+    - cron: "0 9 * * *"
 
 permissions:
   contents: read
@@ -46,6 +48,7 @@ jobs:
       bootstrap: ${{ steps.tests.outputs.bootstrap }}
       has-realm: ${{ steps.tests.outputs.has-realm }}
       has-bootstrap: ${{ steps.tests.outputs.has-bootstrap }}
+      has-elementizer: ${{ steps.tests.outputs.has-elementizer }}
     steps:
       - uses: actions/checkout@v7
       - name: Select tests
@@ -77,4 +80,11 @@ jobs:
       element: ${{ matrix.element }}
       update: ${{ matrix.update }}
       free-disk-space: ${{ matrix.free-disk-space || false }}
+    secrets: inherit
+
+  elementizer:
+    name: elementizer / deploy
+    needs: select
+    if: ${{ needs.select.outputs.has-elementizer == 'true' }}
+    uses: ./.github/workflows/elementizer_deploy_test.yml
     secrets: inherit

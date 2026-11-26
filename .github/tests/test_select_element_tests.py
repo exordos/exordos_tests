@@ -24,6 +24,7 @@ class SelectionTests(unittest.TestCase):
             "0 6 * * *": ("realm", "empty", False),
             "0 7 * * *": ("realm", "s3aas", True),
             "0 8 * * *": ("realm", "dbaas", True),
+            "0 9 * * *": ("elementizer", "elementizer", False),
         }
         for cron, (backend, element, update) in expected.items():
             with self.subTest(cron=cron):
@@ -42,6 +43,9 @@ class SelectionTests(unittest.TestCase):
     def test_manual_all(self):
         matrices = selector.select_tests(TESTS, "workflow_dispatch", {})
         self.assertEqual(len(matrices["realm"]), 5)
+        self.assertEqual(matrices["elementizer"], [
+            {"element": "elementizer", "update": False},
+        ])
         self.assertEqual(matrices["bootstrap"], [
             {"element": "core", "update": True},
             {"element": "world", "update": False, "free-disk-space": True},
@@ -53,6 +57,7 @@ class SelectionTests(unittest.TestCase):
         })
         self.assertEqual(matrices, {
             "realm": [],
+            "elementizer": [],
             "bootstrap": [{"element": "world", "update": False, "free-disk-space": True}],
         })
 
@@ -70,7 +75,7 @@ class SelectionTests(unittest.TestCase):
     def test_same_schedule_can_select_multiple_elements(self):
         tests = [dict(test, cron="0 2 * * *") for test in TESTS]
         matrices = selector.select_tests(tests, "schedule", {"schedule": "0 2 * * *"})
-        self.assertEqual(sum(map(len, matrices.values())), 7)
+        self.assertEqual(sum(map(len, matrices.values())), 8)
 
     def test_unconfigured_selection_fails(self):
         for event_name, event in (
