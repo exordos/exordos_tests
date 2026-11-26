@@ -19,7 +19,43 @@ import uuid
 
 
 class Failure(Exception):
-    pass
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details
+
+
+def redact(value, token=None):
+    secrets = [token, *(os.environ.get(key) for key in
+                       ('ADMIN_PASSWORD', 'USER_PASSWORD', 'TEST_USER_PASSWORD'))]
+    if isinstance(value, dict):
+        return {redact(key, token): redact(item, token) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item, token) for item in value]
+    if isinstance(value, str):
+        for secret in sorted(filter(None, secrets), key=len, reverse=True):
+            # Also cover JSON quoted values embedded inside plain-text errors.
+            for form in (json.dumps(secret)[1:-1], secret):
+                value = value.replace(form, '[REDACTED]')
+    return value
+
+
+def http_failure(message, url, token, data=None, status=None, body=None):
+    details = {'method': 'GET' if data is None else 'POST', 'url': url}
+    if status is not None:
+        details['status'] = status
+    if body is not None:
+        try:
+            response = json.loads(body)
+        except (ValueError, UnicodeError):
+            response = body.decode('utf-8', errors='replace')
+        # Redact before serializing or truncating so escaping and cut-off
+        # secrets cannot defeat replacement. Keep diagnostics bounded.
+        response = redact(response, token)
+        encoded = json.dumps(response, ensure_ascii=True)
+        details['response'] = response if len(encoded) <= 16384 else encoded[:16384]
+        details['response_truncated'] = len(encoded) > 16384
+    details = redact(details, token)
+    return Failure(message + ': ' + json.dumps(details, ensure_ascii=True), details)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -28,7 +64,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(url, token=None, data=None, content_type='application/json'):
+def _request_once(url, token=None, data=None, content_type='application/json', timeout=30):
     headers = {}
     if token:
         headers['Authorization'] = f'Bearer {token}'
@@ -38,23 +74,40 @@ def request(url, token=None, data=None, content_type='application/json'):
             data = json.dumps(data).encode()
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
-        with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=timeout) as response:
             return response.status, response.headers, response.read(2 * 1024 * 1024)
     except urllib.error.HTTPError as error:
         with error:
             return error.code, error.headers, error.read(2 * 1024 * 1024)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise Failure(f'HTTP transport failed ({type(error).__name__})') from None
+        raise http_failure(f'HTTP transport failed ({type(error).__name__})',
+                           url, token, data) from None
 
 
-def api(url, token, data=None):
-    status, _, body = request(url, token, data)
+def request(url, token=None, data=None, content_type='application/json', deadline=None):
+    for attempt in range(4):
+        remaining = 30 if deadline is None else deadline - time.monotonic()
+        if remaining <= 0:
+            raise http_failure('Request deadline exceeded', url, token, data)
+        result = _request_once(url, token, data, content_type, min(30, remaining))
+        status = result[0]
+        if data is not None or status not in (502, 503, 504) or attempt == 3:
+            return result
+        delay = 5 * 2 ** attempt
+        if deadline is not None and time.monotonic() + delay >= deadline:
+            return result
+        print(f'GET returned HTTP {status}; retry {attempt + 1}/3 in {delay}s', flush=True)
+        time.sleep(delay)
+
+
+def api(url, token, data=None, deadline=None):
+    status, _, body = request(url, token, data, deadline=deadline)
     if status not in (200, 201, 202):
-        raise Failure(f'API returned HTTP {status}')
+        raise http_failure(f'API returned HTTP {status}', url, token, data, status, body)
     try:
         return json.loads(body)
     except ValueError:
-        raise Failure('API did not return JSON') from None
+        raise http_failure('API did not return JSON', url, token, data, status, body) from None
 
 
 def repository(records, realm):
@@ -122,14 +175,11 @@ class Run:
         self.build_url = None
 
     def save(self, name, value):
-        text = json.dumps(value, indent=2, ensure_ascii=False)
-        for secret in (self.token, os.environ.get('ADMIN_PASSWORD')):
-            if secret:
-                text = text.replace(secret, '[REDACTED]')
+        text = json.dumps(redact(value, self.token), indent=2, ensure_ascii=False)
         (self.output / name).write_text(text + '\n')
 
-    def latest_plan(self):
-        plans = api(self.build_url + '/plans/', self.token)
+    def latest_plan(self, deadline=None):
+        plans = api(self.build_url + '/plans/', self.token, deadline=deadline)
         if not plans:
             raise Failure('Build has no plan')
         return max(plans, key=lambda plan: plan['version'])
@@ -140,7 +190,8 @@ class Run:
         phase = None
         phase_deadline = deadline
         while time.monotonic() < deadline:
-            progress = api(self.build_url + '/actions/progress', self.token)
+            progress = api(self.build_url + '/actions/progress', self.token,
+                           deadline=min(deadline, phase_deadline))
             self.save('progress.json', progress)
             print(f"Build: {progress['build_status']}, phase: {progress['phase']}", flush=True)
             if progress['phase'] != phase:
@@ -155,7 +206,7 @@ class Run:
                 raise Failure(f"Build stopped: {progress['build_status']}")
             if not progress['plan_stale'] and progress['plan_version']:
                 if version != progress['plan_version'] or progress['build_status'] == 'DONE':
-                    plan = self.latest_plan()
+                    plan = self.latest_plan(min(deadline, phase_deadline))
                     self.save(f"plan-{plan['version']}.json", plan)
                     version = plan['version']
                     # Name/version are supplied before uploading. Repeated or new
@@ -165,23 +216,65 @@ class Run:
                     if progress['build_status'] == 'DONE':
                         return plan
             delay = progress.get('wait_seconds') or 15
-            time.sleep(min(max(1, delay), max(0, deadline - time.monotonic())))
+            time.sleep(min(max(1, delay), max(0, min(deadline, phase_deadline) - time.monotonic())))
         raise Failure('Build deadline exceeded')
 
-    def verify(self, plan, marker, timeout):
-        urls = [item['url'] for item in plan.get('endpoints', []) if item.get('url')]
+    def site_url(self, plan, wrapping, realm, deadline):
+        if 'endpoints' in plan:
+            urls = [item['url'] for item in (plan['endpoints'] or []) if item.get('url')]
+        else:
+            # Elementizer 4baa1932e (deployed 0.3.2.dev0) has no plan endpoints.
+            # Resolve the actual vhost owned by the installed element instead.
+            query = urllib.parse.urlencode({'name': wrapping['element_name']})
+            elements = api(realm + '/v1/em/elements/?' + query, self.token, deadline=deadline)
+            elements = [item for item in elements
+                        if item['name'] == wrapping['element_name']
+                        and item['version'] == wrapping['element_version']]
+            if len(elements) != 1:
+                raise Failure(f'Expected one installed element, found {len(elements)}')
+            element_id = str(uuid.UUID(elements[0]['uuid']))
+            resources = api(realm + f'/v1/em/elements/{element_id}/resources/',
+                            self.token, deadline=deadline)
+            vhost_ids = {item['uuid'] for item in resources
+                         if item['kind'] == 'em_core_network_lb_vhosts'}
+            if not vhost_ids:
+                raise Failure('Installed element has no vhost resources')
+            urls = []
+            selected = []
+            lbs = api(realm + '/v1/network/lb/', self.token, deadline=deadline)
+            for lb in lbs:
+                lb_id = str(uuid.UUID(lb['uuid']))
+                vhosts = api(realm + f'/v1/network/lb/{lb_id}/vhosts/',
+                             self.token, deadline=deadline)
+                for vhost in vhosts:
+                    if (vhost['uuid'] not in vhost_ids or not vhost.get('enabled')
+                            or vhost.get('status') != 'ACTIVE'
+                            or vhost.get('protocol') != 'http' or vhost.get('port') != 80):
+                        continue
+                    for domain in vhost.get('domains') or []:
+                        # Managed-realm ingress terminates public TLS; the child
+                        # Core vhost serves HTTP behind it (skeleton.py:780).
+                        urls.append('https://' + domain)
+                    selected.append({key: vhost[key] for key in
+                                     ('uuid', 'domains', 'protocol', 'port', 'status')})
+            self.save('endpoint-discovery.json', {'element_id': element_id,
+                      'element_name': wrapping['element_name'], 'vhosts': selected})
+        urls = sorted(set(urls))
         if len(urls) != 1:
             raise Failure(f'Expected one public site endpoint, found {len(urls)}')
-        url = urls[0]
+        return urls[0]
+
+    def verify(self, plan, marker, timeout, wrapping, realm):
+        deadline = time.monotonic() + timeout
+        url = self.site_url(plan, wrapping, realm, deadline)
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username:
             raise Failure('Invalid public endpoint')
-        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             results = []
             for target, probe in ((url, False), (url.rstrip('/') + '/probe.txt', True)):
                 try:
-                    status, headers, body = request(target)
+                    status, headers, body = request(target, deadline=deadline)
                     valid = (body == (marker + '\n').encode() if probe else
                              marker.encode() in body and
                              headers.get_content_type() == 'text/html')
@@ -196,11 +289,13 @@ class Run:
         raise Failure('Published site did not serve the current fixture before deadline')
 
     def execute(self, realm, timeout, http_timeout):
-        marker = 'elementizer-smoke-' + uuid.uuid4().hex
+        marker = 'smoke-' + uuid.uuid4().hex[:16]
         repo = repository(api(realm + '/v1/repo/repositories/', self.token), realm)
-        status, _, _ = request(repo['url'] + f'/exordos-elements/{marker}/0.1.0/inventory.json', self.token)
+        inventory_url = repo['url'] + f'/exordos-elements/{marker}/0.1.0/inventory.json'
+        status, _, body = request(inventory_url, self.token)
         if status != 404:
-            raise Failure(f'Repository preflight expected 404, got {status}')
+            raise http_failure('Repository preflight expected 404', inventory_url,
+                               self.token, status=status, body=body)
         build = api(self.endpoint + '/builds/', self.token, {
             'name': marker,
             'description': 'Publish the supplied static site. index.html and probe.txt '
@@ -208,7 +303,7 @@ class Run:
             'No compilation, server process, database, external services or secrets are '
             'needed. Provide public access on a dedicated address in the realm domain '
             'zone. Application version is 0.1.0.',
-            'minimal': True, 'deploy': True, 'diagnose': False,
+            'minimal': True, 'deploy': True,
             'realm': {'api': {'url': realm}, 'repository': repo},
         })
         build_id = str(uuid.UUID(build['uuid']))
@@ -218,21 +313,24 @@ class Run:
         api(self.build_url + '/actions/answers/invoke', self.token,
             {'answers': {'element_name': marker, 'element_version': '0.1.0'}})
         body, content_type = fixture(marker)
-        status, _, _ = request(self.build_url + '/actions/upload/invoke', self.token, body, content_type)
+        upload_url = self.build_url + '/actions/upload/invoke'
+        status, _, response = request(upload_url, self.token, body, content_type)
         if status not in (200, 201, 202):
-            raise Failure(f'Upload returned HTTP {status}')
+            raise http_failure('Upload failed', upload_url, self.token, body, status, response)
         plan = self.wait(timeout)
-        self.save('wrapping.json', api(self.build_url + '/actions/wrapping', self.token))
-        url = self.verify(plan, marker, http_timeout)
+        wrapping = api(self.build_url + '/actions/wrapping', self.token)
+        self.save('wrapping.json', wrapping)
+        url = self.verify(plan, marker, http_timeout, wrapping, realm)
         self.save('result.json', {'success': True, 'build_id': build_id, 'url': url})
         print(f'Published HTML verified: {url}', flush=True)
 
     def diagnostics(self):
+        deadline = time.monotonic() + 60
         if self.build_url:
             for name, suffix in [('error', '/actions/error'), ('progress', '/actions/progress'),
                                  ('plans', '/plans/')]:
                 try:
-                    self.save(name + '.json', api(self.build_url + suffix, self.token))
+                    self.save(name + '.json', api(self.build_url + suffix, self.token, deadline=deadline))
                 except Failure:
                     pass
 
@@ -250,10 +348,14 @@ def main():
         run = Run(args.endpoint, issue_token(realm), args.output)
         run.execute(realm, args.timeout, args.http_timeout)
     except (Failure, ValueError, KeyError, subprocess.TimeoutExpired) as error:
-        # API bodies and subprocess output can contain credentials: never dump them.
+        # HTTP failures already contain sanitized diagnostics; other exception
+        # messages and subprocess output may contain credentials.
         message = str(error) if isinstance(error, Failure) else type(error).__name__
         if run:
-            run.save('result.json', {'success': False, 'error': message})
+            result = {'success': False, 'error': message}
+            if isinstance(error, Failure) and error.details is not None:
+                result['request'] = error.details
+            run.save('result.json', result)
             run.diagnostics()
         print(f'Deployment test failed: {message}', flush=True)
         return 1

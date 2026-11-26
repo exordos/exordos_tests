@@ -31,7 +31,7 @@ def select_tests(tests, event_name, event):
             }
             for test in selected if test["backend"] == backend
         ]
-        for backend in ("realm", "bootstrap")
+        for backend in ("realm", "bootstrap", "elementizer")
     }
 
 
