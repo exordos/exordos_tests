@@ -289,7 +289,7 @@ class Run:
         raise Failure('Published site did not serve the current fixture before deadline')
 
     def execute(self, realm, timeout, http_timeout):
-        marker = 'elementizer-smoke-' + uuid.uuid4().hex
+        marker = 'smoke-' + uuid.uuid4().hex[:16]
         repo = repository(api(realm + '/v1/repo/repositories/', self.token), realm)
         inventory_url = repo['url'] + f'/exordos-elements/{marker}/0.1.0/inventory.json'
         status, _, body = request(inventory_url, self.token)
